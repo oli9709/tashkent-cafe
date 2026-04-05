@@ -1,0 +1,99 @@
+const { ADMIN_CHAT_ID } = require('../config');
+
+let botInstance = null;
+
+/** Call this once after Telegraf bot is created */
+function setBotInstance(bot) {
+  botInstance = bot;
+}
+
+/** Format ₩ amount */
+const won = (n) => `${Number(n).toLocaleString('ko-KR')}₩`;
+
+/**
+ * Notify admin about a new order.
+ * Sends a message with inline buttons: Confirm / Reject
+ */
+async function notifyAdminNewOrder(order, items) {
+  if (!botInstance || !ADMIN_CHAT_ID) return;
+
+  const modeLabel = order.mode === 'togo' ? '🛍 Olib ketish' : '🌅 Bozorga (5:00 yetkazish)';
+  const itemLines = items.map(i => `  • ${i.name_uz} ×${i.quantity} — ${won(i.price * i.quantity)}`).join('\\n');
+
+  const text =
+    `🔔 <b>Yangi buyurtma #${order.id}</b>\\n\\n` +
+    `👤 Mijoz: ${order.user_name || "Noma'lum"}${order.username ? ' (@' + order.username + ')' : ''}\\n` +
+    `📦 Rejim: ${modeLabel}\\n\\n` +
+    `🍽 <b>Taomlar:</b>\\n${itemLines}\\n\\n` +
+    `💰 Jami: <b>${won(order.total)}</b>\\n` +
+    `📅 Vaqt: ${new Date().toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul' })}`;
+
+  await botInstance.telegram.sendMessage(ADMIN_CHAT_ID, text, {
+    parse_mode: 'HTML',
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: '✅ Tasdiqlash', callback_data: `approve_${order.id}` },
+          { text: '❌ Rad etish', callback_data: `reject_${order.id}` },
+        ],
+      ],
+    },
+  });
+}
+
+/**
+ * Notify admin about AI verification result for a payment screenshot.
+ */
+async function notifyAdminPaymentVerified(order, aiResult) {
+  if (!botInstance || !ADMIN_CHAT_ID) return;
+
+  const statusIcon = aiResult.verified ? '✅' : '⚠️';
+  const statusText = aiResult.verified ? "AI tasdiqladi" : "Qo'lda tekshiring";
+
+  const text =
+    `${statusIcon} <b>Buyurtma #${order.id} — To'lov ${statusText}</b>\\n\\n` +
+    `💰 Kutilgan summa: ${won(order.total)}\\n` +
+    `🔍 Aniqlangan: ${aiResult.extractedAmount ? won(aiResult.extractedAmount) : 'topilmadi'}\\n` +
+    `👤 Qabul qiluvchi: ${aiResult.extractedName || 'topilmadi'}\\n` +
+    `📊 Ishonchlilik: ${Math.round((aiResult.confidence || 0) * 100)}%\\n`;
+
+  await botInstance.telegram.sendMessage(ADMIN_CHAT_ID, text, {
+    parse_mode: 'HTML',
+    reply_markup: !aiResult.verified ? {
+      inline_keyboard: [
+        [
+          { text: "✅ Qo'lda tasdiqlash", callback_data: `approve_${order.id}` },
+          { text: "❌ Rad etish", callback_data: `reject_${order.id}` },
+        ],
+      ],
+    } : undefined,
+  });
+}
+
+/**
+ * Notify user about order status change.
+ */
+async function notifyUserOrderStatus(telegramId, orderId, status) {
+  if (!botInstance) return;
+
+  const messages = {
+    confirmed: `✅ Buyurtmangiz #${orderId} qabul qilindi! Tayyor bo'lganda xabar beramiz.`,
+    rejected: `❌ Buyurtmangiz #${orderId} rad etildi. Muammo uchun @admin bilan bog'laning.`,
+    delivered: `🎉 Buyurtmangiz #${orderId} yetkazildi! Xaridingiz uchun rahmat! 🙏`,
+  };
+
+  const text = messages[status] || `📦 Buyurtma #${orderId} holati: ${status}`;
+
+  try {
+    await botInstance.telegram.sendMessage(telegramId, text);
+  } catch (err) {
+    console.error(`[Notify] Failed to notify user ${telegramId}:`, err.message);
+  }
+}
+
+module.exports = {
+  setBotInstance,
+  notifyAdminNewOrder,
+  notifyAdminPaymentVerified,
+  notifyUserOrderStatus,
+};
