@@ -7,7 +7,9 @@ RUN npm install --production
 
 COPY bot/src ./src
 
-# node:20-alpine already has a 'node' user (uid=1000)
+# Create uploads directory and give node user ownership
+RUN mkdir -p /app/uploads && chown -R node:node /app
+
 USER node
 
 EXPOSE 7860
