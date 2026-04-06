@@ -1,19 +1,20 @@
-FROM node:24-alpine
+FROM node:20-alpine
 
-WORKDIR /usr/src/app
+# Use an unprivileged user id 1000 for Hugging Face
+RUN addgroup -g 1000 appgroup && \
+    adduser -u 1000 -G appgroup -S appuser
 
-# Copy package files
-COPY bot/package*.json ./
+WORKDIR /app
 
-# Install dependencies (requires build tools for SQLite)
-RUN apk add --no-cache python3 make g++ 
+# Copy files and adjust ownership
+COPY --chown=appuser:appgroup bot/package*.json ./
 RUN npm install --production
 
-# Copy application code
-COPY bot/src ./src
+COPY --chown=appuser:appgroup bot/src ./src
 
-# Expose API port
-EXPOSE 3001
+# Switch to non-root
+USER appuser
 
-# Command to run
+EXPOSE 7860
+
 CMD ["node", "src/index.js"]
