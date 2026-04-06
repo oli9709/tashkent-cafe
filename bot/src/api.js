@@ -93,13 +93,22 @@ router.post('/orders', async (req, res) => {
   const order = await orderQueries.getById(orderId);
   const orderItems = await orderQueries.getItemsByOrderId(orderId);
 
-  // Notify admin
-  await notifyAdminNewOrder(order, orderItems);
-  // SSE broadcast
-  broadcastSSE('new_order', { order, items: orderItems });
+  // Notify admin (non-blocking — don't crash if notification fails)
+  try {
+    await notifyAdminNewOrder(order, orderItems);
+  } catch (notifyErr) {
+    console.error('[API] Admin notification failed:', notifyErr.message);
+  }
+
+  // SSE broadcast (non-blocking)
+  try {
+    broadcastSSE('new_order', { order, items: orderItems });
+  } catch (_) {}
 
   // Update last_order_id for "My Regular Order"
-  await userQueries.updateLastOrder(orderId, telegram_id);
+  try {
+    await userQueries.updateLastOrder(orderId, telegram_id);
+  } catch (_) {}
 
   res.json({
     ok: true,
