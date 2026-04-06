@@ -2,6 +2,12 @@
   command = "npm run build"
   publish = "dist"
 
+# Backend API ga proxy
+[[redirects]]
+  from = "/api/*"
+  to = "https://adammardanov-tashkent-cafe-bot.hf.space/api/:splat"
+  status = 200
+
 # React Router uchib ketmasligi uchun (SPA fallback)
 [[redirects]]
   from = "/*"
