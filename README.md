@@ -1,3 +1,13 @@
+---
+title: Tashkent Cafe Bot
+emoji: 🍽️
+colorFrom: green
+colorTo: blue
+sdk: docker
+pinned: false
+app_port: 7860
+---
+
 # 🍽️ Tashkent Cafe — Buyurtma Avtomatlashtirish Tizimi
 
 Koreyadagi "Tashkent Cafe" oshxonasi uchun to'liq buyurtma avtomatlashtirish tizimi.
