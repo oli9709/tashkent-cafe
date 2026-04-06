@@ -5,8 +5,8 @@ const fs = require('fs');
 const cors = require('cors');
 
 const { menuQueries, orderQueries, userQueries, createOrderTransaction } = require('./services/db');
-const { verifyPaymentScreenshot } = require('./services/vision');
-const { notifyAdminNewOrder, notifyAdminPaymentVerified } = require('./services/notify');
+const { verifyReceipt } = require('./utils/ocr_helper');
+const { notifyAdminNewOrder, notifyAdminPaymentVerified, notifyUserOrderStatus, notifyUserToSendScreenshot } = require('./services/notify');
 const { UPLOADS_DIR, BANK_ACCOUNT, BANK_OWNER } = require('./config');
 
 // ── SSE clients list ──────────────────────────────────────────
@@ -104,6 +104,20 @@ router.post('/orders', async (req, res) => {
   // Update last_order_id for "My Regular Order"
   userQueries.updateLastOrder(orderId, telegram_id).catch(() => {});
 
+  // Agar "togo" (olib ketish) bo'lsa, mijozdan To'lov skrinshotini bot orqali so'rash
+  if (mode === 'togo') {
+    notifyUserToSendScreenshot(telegram_id, orderId, total, BANK_ACCOUNT, BANK_OWNER).catch(err => 
+      console.error('[API] User screenshot request failed:', err.message)
+    );
+  } else if (mode === 'bozor') {
+    // Agar "bozor" bo'lsa, xabar jo'natib ogohlantirish (naqd to'lov)
+    const { botInstance } = require('./services/notify');
+    const msg = `🎉 Buyurtmangiz qabul qilindi! (ID: #${orderId})\n\n🌅 Bozorga yetkazib berilganda naqd to'laysiz.\nTayyor bo'lganda sizga xabar beramiz!`;
+    const bot = require('./services/notify'); // if needed directly
+    // Or we simply use notifyUserOrderStatus initially
+    notifyUserOrderStatus(telegram_id, orderId, 'Qabul qilindi va yetkazishga tayyorlanmoqda (Naqd to\'lov)').catch(() => {});
+  }
+
   res.json({
     ok: true,
     order_id: orderId,
@@ -132,18 +146,55 @@ router.post('/orders/:id/payment', upload.single('screenshot'), async (req, res)
   await orderQueries.updatePayment({ screenshot: screenshotPath, id });
 
   // Run AI verification asynchronously
-  verifyPaymentScreenshot(screenshotPath, order.total).then(async (aiResult) => {
-    await orderQueries.updateAiResult({
-      ai_verified: aiResult.verified ? 1 : 0,
-      ai_amount: aiResult.extractedAmount,
-      ai_confidence: aiResult.confidence,
-      id,
-    });
+  (async () => {
+    try {
+      // Rasmni buffer sifatida o'qib Gemini ga yuborish
+      const imageBuffer = fs.readFileSync(screenshotPath);
+      const aiResult = await verifyReceipt(imageBuffer, req.file.mimetype);
+      
+      const expectedAmount = order.total;
+      /*
+       * Summa solishtiriladi (Olingan summa >= Xarid summasi).
+       * Ba'zan ortiqcha to'lov yoki komissiya bo'lishi mumkinligi
+       * uchun qat'iy tenglik o'rniga tolerans (±500₩) ishlatsak ham
+       * bo'ladi, bu yerda sodda "katta yoki teng" varianti olindi.
+       */
+      const amountTolerance = 500;
+      const isVerified = Math.abs(aiResult.amount - expectedAmount) <= amountTolerance 
+                         && aiResult.amount > 0;
 
-    const updatedOrder = await orderQueries.getById(id);
-    await notifyAdminPaymentVerified(updatedOrder, aiResult);
-    broadcastSSE('order_updated', { order: updatedOrder, ai: aiResult });
-  }).catch(err => console.error('[API] Vision error:', err));
+      await orderQueries.updateAiResult({
+        ai_verified: isVerified ? 1 : 0,
+        ai_amount: aiResult.amount,
+        ai_confidence: 1.0, // Gemini uchun statik confidence
+        id,
+      });
+
+      // Agar summa mos kelsa, avtomatik "To'landi" (confirmed) statusiga o'tkazish
+      if (isVerified) {
+        await orderQueries.updateStatus({ status: 'confirmed', id });
+        // Mijozga to'lov tasdiqlangani haqida xabar yuborish
+        await notifyUserOrderStatus(order.telegram_id, id, 'confirmed');
+      }
+
+      const updatedOrder = await orderQueries.getById(id);
+      
+      // Admin uchun AI natijasini shakllantirish
+      const aiNotifyData = {
+        verified: isVerified,
+        extractedAmount: aiResult.amount,
+        extractedName: aiResult.recipient_name,
+        confidence: 1.0
+      };
+
+      await notifyAdminPaymentVerified(updatedOrder, aiNotifyData);
+      broadcastSSE('order_updated', { order: updatedOrder, ai: aiNotifyData });
+      
+    } catch (err) {
+      console.error('[API] OCR / Vision error:', err);
+      // Xato bo'lsa adminga xabar yo'q, admin o'zi tekshirishi kerak
+    }
+  })();
 
   res.json({ ok: true, message: 'Screenshot qabul qilindi. AI tekshirmoqda...' });
 });

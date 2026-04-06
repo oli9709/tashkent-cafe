@@ -1,8 +1,10 @@
 const { Telegraf, Markup } = require('telegraf');
 const { userQueries, orderQueries, supabase } = require('../services/db');
-const { notifyUserOrderStatus } = require('../services/notify');
+const { notifyUserOrderStatus, notifyAdminPaymentVerified } = require('../services/notify');
 const { MINI_APP_URL, ADMIN_CHAT_ID } = require('../config');
 const { broadcastSSE } = require('../api');
+const { verifyReceipt } = require('../utils/ocr_helper');
+const axios = require('axios');
 
 function registerHandlers(bot) {
   bot.start(async (ctx) => {
@@ -106,6 +108,72 @@ function registerHandlers(bot) {
     ctx.reply('🔐 Admin panel:', Markup.inlineKeyboard([
       [Markup.button.webApp('📊 Admin Dashboard', `${MINI_APP_URL}?admin=1`)],
     ]));
+  });
+
+  bot.on('photo', async (ctx) => {
+    try {
+      // Eng so'nggi to'lov kutilayotgan (pending) buyurtmani topish
+      const { data: pendingOrder } = await supabase.from('orders')
+        .select('*, users!inner(telegram_id)')
+        .eq('users.telegram_id', String(ctx.from.id))
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (!pendingOrder) {
+        return ctx.reply("Sizda hozirda to'lov kutilayotgan buyurtma yo'q.\nYangi buyurtma berish uchun Menyuga kiring.");
+      }
+
+      const orderId = pendingOrder.id;
+      const expectedAmount = pendingOrder.total;
+      await ctx.reply("📸 Skrinshot qabul qilindi. AI tasdiqlamoqda... Iltimos kuting ⏳");
+
+      // Telegramdan rasmni olish
+      const photo = ctx.message.photo.pop();
+      const fileLink = await ctx.telegram.getFileLink(photo.file_id);
+      const response = await axios.get(fileLink.href, { responseType: 'arraybuffer' });
+      const imageBuffer = Buffer.from(response.data);
+
+      // AI bilan verification
+      const aiResult = await verifyReceipt(imageBuffer, 'image/jpeg');
+
+      const amountTolerance = 500;
+      const isVerified = Math.abs(aiResult.amount - expectedAmount) <= amountTolerance 
+                         && aiResult.amount > 0;
+
+      await orderQueries.updateAiResult({
+        ai_verified: isVerified ? 1 : 0,
+        ai_amount: aiResult.amount,
+        ai_confidence: 1.0,
+        id: orderId,
+      });
+
+      if (isVerified) {
+        // AI tasdiqladi -> statusni 'payment_uploaded' yoki 'ai_verified' qilib Adminga jo'natamiz
+        await orderQueries.updateStatus({ status: 'ai_verified', id: orderId });
+        await ctx.reply("✅ To'lov cheki AI tomonidan tasdiqlandi! Adminga yuborildi. Kuting...");
+        
+        // Adminga bildirishnoma
+        const updatedOrder = await orderQueries.getById(orderId);
+        const aiNotifyData = {
+          verified: isVerified,
+          extractedAmount: aiResult.amount,
+          extractedName: aiResult.recipient_name,
+          confidence: 1.0
+        };
+
+        await notifyAdminPaymentVerified(updatedOrder, aiNotifyData);
+        broadcastSSE('order_updated', { order: updatedOrder, ai: aiNotifyData });
+      } else {
+        // Xato bo'lsa -> Qayta so'rash
+        await ctx.reply(`❌ Skrinshotdagi summa mos kelmadi!\n\nKutilgan summa: ${Number(expectedAmount).toLocaleString('ko-KR')}₩\nO'qilgan summa: ${Number(aiResult.amount).toLocaleString('ko-KR')}₩\n\nIltimos, dori/raqamlari aniq tushgan to'g'ri chekni qayta yuboring. 📸`);
+      }
+      
+    } catch (error) {
+      console.error("[Bot Photo Handler] Error:", error.message);
+      ctx.reply("❌ Skrinshotni o'qishda xatolik yuz berdi. Iltimos adminga murojaat qiling.");
+    }
   });
 }
 

@@ -91,9 +91,31 @@ async function notifyUserOrderStatus(telegramId, orderId, status) {
   }
 }
 
+/**
+ * Notify user to send a payment screenshot.
+ */
+async function notifyUserToSendScreenshot(telegramId, orderId, total, bankAccount, bankOwner) {
+  if (!botInstance) return;
+
+  const text = `🎉 Buyurtmangiz qabul qilindi! (ID: #${orderId})\n\n` +
+               `Iltimos, to'lovni quyidagi hisob raqamiga amalga oshiring:\n\n` +
+               `🏦 Bank/Raqam: <b>${bankAccount}</b>\n` +
+               `👤 Qabul qiluvchi: <b>${bankOwner}</b>\n` +
+               `💰 Summa: <b>${won(total)}</b>\n\n` +
+               `📸 <b>To'lovni amalga oshirgach, chekni (skrinshotni) shu yerga (Botga) yuboring!</b>\n` +
+               `Biz bot orqali avtomatik tasdiqlaymiz.`;
+
+  try {
+    await botInstance.telegram.sendMessage(telegramId, text, { parse_mode: 'HTML' });
+  } catch (err) {
+    console.error(`[Notify] Failed to ask user ${telegramId} for screenshot:`, err.message);
+  }
+}
+
 module.exports = {
   setBotInstance,
   notifyAdminNewOrder,
   notifyAdminPaymentVerified,
   notifyUserOrderStatus,
+  notifyUserToSendScreenshot,
 };

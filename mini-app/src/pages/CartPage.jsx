@@ -36,20 +36,30 @@ export default function CartPage() {
       setOrderId(result.order_id);
       haptic?.('success');
 
-      if (mode === 'bozor') {
-        toast.success('✅ Buyurtmangiz qabul qilindi!', { duration: 3000 });
-        clear();
-        navigate('/success', { state: { orderId: result.order_id, mode: 'bozor', total: result.total } });
-      } else {
-        navigate('/payment', {
-          state: {
-            orderId: result.order_id,
-            total: result.total,
-            bankAccount: result.bank_account,
-            bankOwner: result.bank_owner,
-          },
-        });
-      }
+      toast.success('✅ Buyurtmangiz qabul qilindi!', { duration: 1500 });
+      clear();
+
+      setTimeout(() => {
+        const tg = window.Telegram?.WebApp;
+        if (tg) {
+          tg.close();
+        } else {
+          // Fallback if not inside Telegram
+          if (mode === 'bozor') {
+            navigate('/success', { state: { orderId: result.order_id, mode: 'bozor', total: result.total } });
+          } else {
+            navigate('/payment', {
+              state: {
+                orderId: result.order_id,
+                total: result.total,
+                bankAccount: result.bank_account,
+                bankOwner: result.bank_owner,
+              },
+            });
+          }
+        }
+      }, 1500);
+
     } catch (err) {
       console.error(err);
       const msg = err.response?.data?.error || "Buyurtma yuborishda xatolik";
@@ -182,9 +192,7 @@ export default function CartPage() {
         >
           {loading
             ? <><div className="spinner" style={{ width: '18px', height: '18px' }} /> Yuborilmoqda...</>
-            : mode === 'bozor'
-              ? '✅ Buyurtmani tasdiqlash'
-              : '💳 To\'lovga o\'tish'
+            : '✅ Buyurtmani tasdiqlash'
           }
         </motion.button>
 
