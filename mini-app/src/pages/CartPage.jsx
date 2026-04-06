@@ -31,7 +31,12 @@ export default function CartPage() {
         username: user.username,
         mode,
         items: items.map(i => ({ id: i.id, quantity: i.quantity })),
+        bank_account: '1000-7590-5938',
+        bank_owner: 'TURSUNOV UMIDJON'
       });
+
+      setOrderId(result.order_id);
+      haptic?.('success');
 
       setOrderId(result.order_id);
       haptic?.('success');
@@ -39,29 +44,21 @@ export default function CartPage() {
       toast.success('✅ Buyurtmangiz qabul qilindi!', { duration: 1500 });
       clear();
 
+      // Mini Appni yopish
       setTimeout(() => {
         const tg = window.Telegram?.WebApp;
         if (tg) {
           tg.close();
         } else {
-          // Fallback if not inside Telegram
-          if (mode === 'bozor') {
-            navigate('/success', { state: { orderId: result.order_id, mode: 'bozor', total: result.total } });
-          } else {
-            navigate('/payment', {
-              state: {
-                orderId: result.order_id,
-                total: result.total,
-                bankAccount: result.bank_account,
-                bankOwner: result.bank_owner,
-              },
-            });
-          }
+          // Telegramdan tashqarida bo'lsa navigatsiya
+          navigate('/success', { state: { orderId: result.order_id, mode, total: result.total } });
         }
       }, 1500);
 
     } catch (err) {
-      console.error(err);
+      console.error('[CartPage] Order error:', err);
+      // Agar buyurtma aslida yaratilgan bo'lsa (masalan 4xx/5xx qaytsa ham db da bo'lsa), 
+      // toast chiqarmaymiz, lekin hozircha standart xatolikni ko'rsatamiz
       const msg = err.response?.data?.error || "Buyurtma yuborishda xatolik";
       toast.error(msg);
       haptic?.('error');

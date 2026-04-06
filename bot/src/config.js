@@ -33,8 +33,8 @@ module.exports = {
   // ── To'lov Ma'lumotlari ───────────────────────────────────────
   // Hugging Face Variable: PAYMENT_RECIPIENT, BANK_ACCOUNT, BANK_OWNER
   PAYMENT_RECIPIENT: process.env.PAYMENT_RECIPIENT || 'Tashkent',
-  BANK_ACCOUNT: process.env.BANK_ACCOUNT || '3333-01-XXXXXXX',
-  BANK_OWNER: process.env.BANK_OWNER || 'Oshxona',
+  BANK_ACCOUNT: process.env.BANK_ACCOUNT || '1000-7590-5938',
+  BANK_OWNER: process.env.BANK_OWNER || 'TURSUNOV UMIDJON',
 
   // ── Fayl Yo'llari ─────────────────────────────────────────────
   DB_PATH: process.env.DB_PATH || './data/cafe.db',
