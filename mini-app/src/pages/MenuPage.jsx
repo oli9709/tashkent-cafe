@@ -10,10 +10,33 @@ const CATEGORIES = ['Hammasi', 'Birinchi taom', 'Ikkinchi taom', 'Non & Pishiriq
 
 const won = (n) => `${Number(n).toLocaleString('ko-KR')}₩`;
 
+const getEmoji = (item) => {
+  if (item.emoji) return item.emoji;
+  const cat = item.category?.toLowerCase() || '';
+  const name = item.name_uz?.toLowerCase() || '';
+  if (name.includes('lavash')) return '🌯';
+  if (name.includes('somsa')) return '🥟';
+  if (name.includes('chuchvara')) return '🥣';
+  if (name.includes('xonim')) return '🥟';
+  if (name.includes('qozon')) return '🥩';
+  if (name.includes('achiq')) return '🥘';
+  if (name.includes('shokolad') || name.includes('tort')) return '🍰';
+  if (name.includes('non') || name.includes('kabob')) return '🥙';
+  if (name.includes("sho'rva")) return '🍲';
+  if (cat.includes('birinchi')) return '🥣';
+  if (cat.includes('ikkinchi')) return '🥘';
+  if (cat.includes('non')) return '🥐';
+  if (cat.includes('shirinlik')) return '🍰';
+  if (cat.includes('ichimlik')) return '🥤';
+  return '🍽️';
+};
+
 export default function MenuPage() {
   const navigate = useNavigate();
   const { user } = useTelegramWebApp();
-  const { items: cartItems, addItem, count, total, loadFromLastOrder } = useCartStore();
+  const { items: cartItems, addItem, updateQty, removeItem, loadFromLastOrder } = useCartStore();
+  const count = cartItems.reduce((sum, i) => sum + i.quantity, 0);
+  const total = cartItems.reduce((sum, i) => sum + i.price * i.quantity, 0);
 
   const [menu, setMenu] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -48,8 +71,9 @@ export default function MenuPage() {
 
   const handleAdd = (item) => {
     if (item.is_sold_out) return;
-    addItem({ id: item.id, name_uz: item.name_uz, price: item.price, emoji: item.emoji });
-    toast.success(`${item.emoji} Savatga qo'shildi!`, { duration: 1500 });
+    const itemEmoji = getEmoji(item);
+    addItem({ id: item.id, name_uz: item.name_uz, price: item.price, emoji: itemEmoji });
+    toast.success(`${itemEmoji} Savatga qo'shildi!`, { duration: 1500 });
   };
 
   const handleRepeatLast = () => {
@@ -75,11 +99,39 @@ export default function MenuPage() {
               </div>
             </div>
           </div>
-          {user && (
-            <div style={{ fontSize: '12px', color: 'var(--text-muted)', textAlign: 'right' }}>
-              👋 {user.name?.split(' ')[0]}
-            </div>
-          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            {user && (
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', textAlign: 'right' }}>
+                👋 {user.name?.split(' ')[0]}
+              </div>
+            )}
+            <button 
+              onClick={() => navigate('/cart')}
+              style={{
+                position: 'relative',
+                background: 'rgba(255,255,255,0.05)',
+                border: '1px solid rgba(255,255,255,0.1)',
+                borderRadius: '50%',
+                width: '38px', height: '38px',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                cursor: 'pointer',
+                fontSize: '18px'
+              }}
+            >
+              🛒
+              {count > 0 && (
+                <div style={{
+                  position: 'absolute', top: '-4px', right: '-4px',
+                  background: 'var(--accent-gold)', color: '#000',
+                  borderRadius: '50%', width: '18px', height: '18px',
+                  fontSize: '11px', fontWeight: 'bold',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center'
+                }}>
+                  {count}
+                </div>
+              )}
+            </button>
+          </div>
         </div>
 
         {/* Category filter tabs */}
@@ -187,29 +239,33 @@ export default function MenuPage() {
                       cursor: item.is_sold_out ? 'default' : 'pointer',
                       display: 'flex',
                       flexDirection: 'column',
+                      padding: '16px',
+                      minHeight: '140px'
                     }}
                     onClick={() => handleAdd(item)}
                   >
-                    {/* Emoji display */}
+                    {/* Background Watermark Emoji */}
                     <div style={{
-                      height: '90px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: '52px',
-                      background: 'rgba(255,255,255,0.03)',
+                      position: 'absolute',
+                      right: '-10px',
+                      bottom: '-10px',
+                      fontSize: '90px',
+                      opacity: 0.15,
+                      transform: 'rotate(-15deg)',
+                      pointerEvents: 'none',
+                      zIndex: 0
                     }}>
-                      {item.emoji}
+                      {getEmoji(item)}
                     </div>
 
-                    {/* Info */}
-                    <div style={{ padding: '10px 12px 12px', flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                      <div style={{ fontSize: '13px', fontWeight: 700, lineHeight: 1.3 }}>{item.name_uz}</div>
+                    {/* Content */}
+                    <div style={{ position: 'relative', zIndex: 1, flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <div style={{ fontSize: '15px', fontWeight: 800, lineHeight: 1.3 }}>{item.name_uz}</div>
                       {item.name_ko && (
-                        <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{item.name_ko}</div>
+                        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{item.name_ko}</div>
                       )}
                       {item.description && (
-                        <div style={{ fontSize: '10px', color: 'var(--text-muted)', lineHeight: 1.4 }}>
+                        <div style={{ fontSize: '10px', color: 'var(--text-secondary)', lineHeight: 1.4, marginTop: '4px', marginBottom: '12px' }}>
                           {item.description}
                         </div>
                       )}
@@ -217,17 +273,35 @@ export default function MenuPage() {
                         <span style={{ fontSize: '14px', fontWeight: 800, color: 'var(--accent-gold)' }}>
                           {won(item.price)}
                         </span>
-                        {qty > 0 && (
-                          <span style={{
-                            background: 'var(--accent-gold)',
-                            color: '#0A0F1E',
-                            borderRadius: '999px',
-                            padding: '2px 8px',
-                            fontSize: '11px',
-                            fontWeight: 800,
-                          }}>
-                            ×{qty}
-                          </span>
+                        
+                        {qty === 0 ? (
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); handleAdd(item); }}
+                            style={{
+                              background: 'var(--accent-gold)', color: '#0A0F1E', border: 'none',
+                              borderRadius: '999px', padding: '4px 12px', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer'
+                            }}
+                          >
+                            Qo'shish
+                          </button>
+                        ) : (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(255,255,255,0.1)', borderRadius: '999px', padding: '2px 4px' }}>
+                            <button 
+                              onClick={(e) => { e.stopPropagation(); if (qty === 1) { removeItem(item.id); } else { updateQty(item.id, qty - 1); } }}
+                              style={{ width: '24px', height: '24px', borderRadius: '50%', border: 'none', background: 'rgba(255,255,255,0.2)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '14px' }}
+                            >
+                              -
+                            </button>
+                            <span style={{ fontSize: '13px', fontWeight: 'bold', minWidth: '16px', textAlign: 'center' }}>
+                              {qty}
+                            </span>
+                            <button 
+                              onClick={(e) => { e.stopPropagation(); handleAdd(item); }}
+                              style={{ width: '24px', height: '24px', borderRadius: '50%', border: 'none', background: 'var(--accent-gold)', color: '#0A0F1E', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '14px', fontWeight: 'bold' }}
+                            >
+                              +
+                            </button>
+                          </div>
                         )}
                       </div>
                     </div>

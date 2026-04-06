@@ -5,3 +5,4 @@ dist
 *.db-journal
 .DS_Store
 *.log
+\ncreate_hf.py\ncreate_hf.sh\nhf_secrets.js

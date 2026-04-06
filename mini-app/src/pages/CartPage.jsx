@@ -11,7 +11,9 @@ const won = (n) => `${Number(n).toLocaleString('ko-KR')}₩`;
 export default function CartPage() {
   const navigate = useNavigate();
   const { user, haptic } = useTelegramWebApp();
-  const { items, mode, setMode, setOrderId, updateQty, removeItem, total, count, clear } = useCartStore();
+  const { items, mode, setMode, setOrderId, updateQty, removeItem, clear } = useCartStore();
+  const count = items.reduce((sum, i) => sum + i.quantity, 0);
+  const total = items.reduce((sum, i) => sum + i.price * i.quantity, 0);
   const [loading, setLoading] = useState(false);
 
   const handlePlaceOrder = async () => {
@@ -142,7 +144,7 @@ export default function CartPage() {
               className={`mode-card ${mode === 'togo' ? 'selected' : ''}`}
               onClick={() => { setMode('togo'); haptic?.('light'); }}
             >
-              <div style={{ fontSize: '32px', marginBottom: '8px' }}>🛍</div>
+              <div style={{ fontSize: '32px', marginBottom: '8px' }}>🥡</div>
               <div style={{ fontSize: '14px', fontWeight: 700, marginBottom: '4px' }}>Olib ketish</div>
               <div style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
                 Bank orqali to'lov<br/>Skrinshot yuborasiz
@@ -157,7 +159,7 @@ export default function CartPage() {
               className={`mode-card ${mode === 'bozor' ? 'selected' : ''}`}
               onClick={() => { setMode('bozor'); haptic?.('light'); }}
             >
-              <div style={{ fontSize: '32px', marginBottom: '8px' }}>🌅</div>
+              <div style={{ fontSize: '32px', marginBottom: '8px' }}>🛵</div>
               <div style={{ fontSize: '14px', fontWeight: 700, marginBottom: '4px' }}>Bozorga</div>
               <div style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
                 Soat 6:00 yetkazish<br/>Naqd pulda to'lov

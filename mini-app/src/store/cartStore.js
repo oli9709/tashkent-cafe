@@ -49,14 +49,6 @@ const useCartStore = create((set, get) => ({
   },
 
   clear: () => set({ items: [], mode: null, orderId: null }),
-
-  get total() {
-    return get().items.reduce((sum, i) => sum + i.price * i.quantity, 0);
-  },
-
-  get count() {
-    return get().items.reduce((sum, i) => sum + i.quantity, 0);
-  },
 }));
 
 export default useCartStore;
