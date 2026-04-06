@@ -16,3 +16,7 @@ services:
         sync: false
       - key: BANK_OWNER
         sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false

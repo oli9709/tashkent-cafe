@@ -12,4 +12,6 @@ module.exports = {
   DB_PATH: process.env.DB_PATH || './data/cafe.db',
   UPLOADS_DIR: process.env.UPLOADS_DIR || './uploads',
   BOZOR_REMINDER_CRON: process.env.BOZOR_REMINDER_CRON || '0 6 * * *',
+  SUPABASE_URL: process.env.SUPABASE_URL || 'https://iznzvrtzijkgklketlkc.supabase.co',
+  SUPABASE_KEY: process.env.SUPABASE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml6bnp2cnR6aWprZ2tsa2V0bGtjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU0MTI5NjAsImV4cCI6MjA5MDk4ODk2MH0.2Qh10rRktGcVf8ILhkIYJoIZ-Wmw_PgyLZEZzxOljm0',
 };

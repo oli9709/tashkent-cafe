@@ -1,250 +1,167 @@
-const Database = require('better-sqlite3');
-const path = require('path');
-const fs = require('fs');
-const { DB_PATH } = require('../config');
+const { createClient } = require('@supabase/supabase-js');
+const { SUPABASE_URL, SUPABASE_KEY } = require('../config');
 
-// Ensure data directory exists
-const dbDir = path.dirname(DB_PATH);
-if (!fs.existsSync(dbDir)) {
-  fs.mkdirSync(dbDir, { recursive: true });
-}
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-const db = new Database(DB_PATH);
-
-// Enable WAL mode for performance
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
-
-// ──────────────────────────────────────────────────────────────
-// SCHEMA
-// ──────────────────────────────────────────────────────────────
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    telegram_id   TEXT    UNIQUE NOT NULL,
-    name          TEXT,
-    username      TEXT,
-    last_order_id INTEGER,
-    created_at    TEXT    DEFAULT (datetime('now')),
-    FOREIGN KEY (last_order_id) REFERENCES orders(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS menu_items (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    name_uz     TEXT NOT NULL,
-    name_ko     TEXT,
-    price       INTEGER NOT NULL,
-    category    TEXT NOT NULL,
-    emoji       TEXT DEFAULT '🍽️',
-    image_url   TEXT,
-    description TEXT,
-    is_sold_out INTEGER DEFAULT 0,
-    sort_order  INTEGER DEFAULT 0
-  );
-
-  CREATE TABLE IF NOT EXISTS orders (
-    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id             INTEGER NOT NULL,
-    mode                TEXT NOT NULL CHECK(mode IN ('togo','bozor')),
-    status              TEXT NOT NULL DEFAULT 'pending'
-                        CHECK(status IN ('pending','payment_uploaded','ai_verified','confirmed','rejected','delivered')),
-    total               INTEGER NOT NULL,
-    payment_screenshot  TEXT,
-    ai_verified         INTEGER DEFAULT 0,
-    ai_amount           INTEGER,
-    ai_confidence       REAL,
-    admin_note          TEXT,
-    created_at          TEXT DEFAULT (datetime('now')),
-    updated_at          TEXT DEFAULT (datetime('now')),
-    FOREIGN KEY (user_id) REFERENCES users(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS order_items (
-    id        INTEGER PRIMARY KEY AUTOINCREMENT,
-    order_id  INTEGER NOT NULL,
-    item_id   INTEGER NOT NULL,
-    name_uz   TEXT NOT NULL,
-    quantity  INTEGER NOT NULL DEFAULT 1,
-    price     INTEGER NOT NULL,
-    FOREIGN KEY (order_id) REFERENCES orders(id),
-    FOREIGN KEY (item_id)  REFERENCES menu_items(id)
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_orders_user    ON orders(user_id);
-  CREATE INDEX IF NOT EXISTS idx_orders_status  ON orders(status);
-  CREATE INDEX IF NOT EXISTS idx_orders_created ON orders(created_at);
-  CREATE INDEX IF NOT EXISTS idx_order_items    ON order_items(order_id);
-`);
-
-// ──────────────────────────────────────────────────────────────
-// USER QUERIES
-// ──────────────────────────────────────────────────────────────
 const userQueries = {
-  upsert: db.prepare(`
-    INSERT INTO users (telegram_id, name, username)
-    VALUES (@telegram_id, @name, @username)
-    ON CONFLICT(telegram_id) DO UPDATE SET
-      name = excluded.name,
-      username = excluded.username
-  `),
-
-  findByTelegramId: db.prepare(`
-    SELECT * FROM users WHERE telegram_id = ?
-  `),
-
-  updateLastOrder: db.prepare(`
-    UPDATE users SET last_order_id = ? WHERE telegram_id = ?
-  `),
-
-  getAllBozorUsers: db.prepare(`
-    SELECT DISTINCT u.telegram_id, u.name
-    FROM users u
-    JOIN orders o ON o.user_id = u.id
-    WHERE o.mode = 'bozor'
-      AND DATE(o.created_at) = DATE('now')
-      AND o.status NOT IN ('rejected', 'delivered')
-  `),
+  upsert: async ({ telegram_id, name, username }) => {
+    const { data } = await supabase
+      .from('users')
+      .upsert({ telegram_id, name, username }, { onConflict: 'telegram_id' })
+      .select()
+      .single();
+    return data;
+  },
+  findByTelegramId: async (telegram_id) => {
+    const { data } = await supabase.from('users').select('*').eq('telegram_id', telegram_id).single();
+    return data;
+  },
+  updateLastOrder: async (last_order_id, telegram_id) => {
+    await supabase.from('users').update({ last_order_id }).eq('telegram_id', telegram_id);
+  },
+  getAllBozorUsers: async () => {
+    const today = new Date().toISOString().split('T')[0];
+    const { data } = await supabase.from('orders')
+      .select('users!inner(telegram_id, name), status, mode, created_at')
+      .eq('mode', 'bozor')
+      .neq('status', 'rejected')
+      .neq('status', 'delivered')
+      .gte('created_at', today + 'T00:00:00Z');
+      
+    if (!data) return [];
+    const usersMap = new Map();
+    data.forEach(o => {
+      const u = o.users;
+      if (u && !usersMap.has(u.telegram_id)) usersMap.set(u.telegram_id, u);
+    });
+    return Array.from(usersMap.values());
+  }
 };
 
-// ──────────────────────────────────────────────────────────────
-// MENU QUERIES
-// ──────────────────────────────────────────────────────────────
 const menuQueries = {
-  getAll: db.prepare(`
-    SELECT * FROM menu_items ORDER BY sort_order, category, id
-  `),
-
-  getById: db.prepare(`SELECT * FROM menu_items WHERE id = ?`),
-
-  toggleSoldOut: db.prepare(`
-    UPDATE menu_items SET is_sold_out = ? WHERE id = ?
-  `),
-
-  update: db.prepare(`
-    UPDATE menu_items
-    SET name_uz = @name_uz, name_ko = @name_ko, price = @price,
-        category = @category, emoji = @emoji, description = @description,
-        is_sold_out = @is_sold_out
-    WHERE id = @id
-  `),
+  getAll: async () => {
+    const { data } = await supabase.from('menu').select('*').order('category').order('id');
+    return data || [];
+  },
+  getById: async (id) => {
+    const { data } = await supabase.from('menu').select('*').eq('id', id).single();
+    return data;
+  },
+  toggleSoldOut: async (is_sold_out, id) => {
+    await supabase.from('menu').update({ is_sold_out: !!is_sold_out }).eq('id', id);
+  }
 };
 
-// ──────────────────────────────────────────────────────────────
-// ORDER QUERIES
-// ──────────────────────────────────────────────────────────────
 const orderQueries = {
-  create: db.prepare(`
-    INSERT INTO orders (user_id, mode, total)
-    VALUES (@user_id, @mode, @total)
-  `),
-
-  addItem: db.prepare(`
-    INSERT INTO order_items (order_id, item_id, name_uz, quantity, price)
-    VALUES (@order_id, @item_id, @name_uz, @quantity, @price)
-  `),
-
-  updateStatus: db.prepare(`
-    UPDATE orders
-    SET status = @status, updated_at = datetime('now')
-    WHERE id = @id
-  `),
-
-  updatePayment: db.prepare(`
-    UPDATE orders
-    SET payment_screenshot = @screenshot,
-        status = 'payment_uploaded',
-        updated_at = datetime('now')
-    WHERE id = @id
-  `),
-
-  updateAiResult: db.prepare(`
-    UPDATE orders
-    SET ai_verified = @ai_verified,
-        ai_amount = @ai_amount,
-        ai_confidence = @ai_confidence,
-        status = CASE WHEN @ai_verified = 1 THEN 'ai_verified' ELSE 'payment_uploaded' END,
-        updated_at = datetime('now')
-    WHERE id = @id
-  `),
-
-  getById: db.prepare(`
-    SELECT o.*, u.telegram_id, u.name as user_name, u.username
-    FROM orders o
-    JOIN users u ON u.id = o.user_id
-    WHERE o.id = ?
-  `),
-
-  getItemsByOrderId: db.prepare(`
-    SELECT * FROM order_items WHERE order_id = ?
-  `),
-
-  getLastSuccessful: db.prepare(`
-    SELECT o.*, u.telegram_id
-    FROM orders o
-    JOIN users u ON u.id = o.user_id
-    WHERE u.telegram_id = ?
-      AND o.status IN ('confirmed', 'delivered', 'ai_verified')
-    ORDER BY o.created_at DESC
-    LIMIT 1
-  `),
-
-  getAll: db.prepare(`
-    SELECT o.*, u.name as user_name, u.username, u.telegram_id
-    FROM orders o
-    JOIN users u ON u.id = o.user_id
-    ORDER BY o.created_at DESC
-    LIMIT 100
-  `),
-
-  getWeeklyAnalytics: db.prepare(`
-    SELECT
-      DATE(created_at) as date,
-      COUNT(*) as order_count,
-      SUM(total) as revenue,
-      mode,
-      SUM(CASE WHEN status IN ('confirmed','delivered','ai_verified') THEN 1 ELSE 0 END) as confirmed_count
-    FROM orders
-    WHERE created_at >= DATE('now', '-7 days')
-    GROUP BY DATE(created_at), mode
-    ORDER BY date DESC
-  `),
-
-  getTopItems: db.prepare(`
-    SELECT oi.name_uz, SUM(oi.quantity) as total_qty, SUM(oi.quantity * oi.price) as revenue
-    FROM order_items oi
-    JOIN orders o ON o.id = oi.order_id
-    WHERE o.created_at >= DATE('now', '-7 days')
-      AND o.status IN ('confirmed','delivered','ai_verified')
-    GROUP BY oi.item_id
-    ORDER BY total_qty DESC
-    LIMIT 10
-  `),
+  create: async ({ user_id, mode, total }) => {
+    const { data } = await supabase.from('orders').insert({ user_id, mode, total }).select().single();
+    return data;
+  },
+  addItem: async ({ order_id, item_id, name_uz, quantity, price }) => {
+    await supabase.from('order_items').insert({ order_id, menu_item_id: item_id, name_uz, quantity, price });
+  },
+  updateStatus: async ({ status, id }) => {
+    await supabase.from('orders').update({ status }).eq('id', id);
+  },
+  updatePayment: async ({ screenshot, id }) => {
+    // screenshot comes as full path, we store string, this isn't native Supabase storage but works locally or via render ephemeral disk if path used properly. Ideally we upload to Supabase storage, but we'll adapt later.
+    await supabase.from('orders').update({ payment_screenshot: screenshot, status: 'payment_uploaded' }).eq('id', id);
+  },
+  updateAiResult: async ({ ai_verified, ai_amount, ai_confidence, id }) => {
+    const status = ai_verified ? 'ai_verified' : 'payment_uploaded';
+    await supabase.from('orders').update({ ai_verified, ai_amount, ai_confidence, status }).eq('id', id);
+  },
+  getById: async (id) => {
+    const { data } = await supabase.from('orders').select('*, users!inner(telegram_id, name, username)').eq('id', id).single();
+    if(data) {
+      data.telegram_id = data.users.telegram_id;
+      data.user_name = data.users.name;
+      data.username = data.users.username;
+    }
+    return data;
+  },
+  getItemsByOrderId: async (id) => {
+    const { data } = await supabase.from('order_items').select('*').eq('order_id', id);
+    return (data || []).map(i => ({ ...i, item_id: i.menu_item_id }));
+  },
+  getLastSuccessful: async (telegram_id) => {
+    const { data } = await supabase.from('orders')
+      .select('*, users!inner(telegram_id)')
+      .eq('users.telegram_id', telegram_id)
+      .in('status', ['confirmed', 'delivered', 'ai_verified'])
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(); 
+    
+    if (data) data.telegram_id = data.users.telegram_id;
+    return data;
+  },
+  getAll: async () => {
+    const { data } = await supabase.from('orders')
+      .select('*, users!inner(telegram_id, name, username)')
+      .order('created_at', { ascending: false })
+      .limit(100);
+      
+    return (data || []).map(o => {
+      o.telegram_id = o.users.telegram_id;
+      o.user_name = o.users.name;
+      o.username = o.users.username;
+      return o;
+    });
+  },
+  getWeeklyAnalytics: async () => {
+    const { data } = await supabase.from('orders')
+      .select('*')
+      .gte('created_at', new Date(Date.now() - 7*24*60*60*1000).toISOString());
+    const weeklyMap = {};
+    (data || []).forEach(o => {
+      const d = o.created_at.split('T')[0];
+      const key = d + '_' + o.mode;
+      if (!weeklyMap[key]) {
+        weeklyMap[key] = { date: d, mode: o.mode, order_count: 0, revenue: 0, confirmed_count: 0 };
+      }
+      weeklyMap[key].order_count++;
+      weeklyMap[key].revenue += o.total;
+      if (['confirmed','delivered','ai_verified'].includes(o.status)) weeklyMap[key].confirmed_count++;
+    });
+    return Object.values(weeklyMap).sort((a,b) => b.date.localeCompare(a.date));
+  },
+  getTopItems: async () => {
+    const { data } = await supabase.from('order_items')
+      .select('*, orders!inner(status, created_at)')
+      .gte('orders.created_at', new Date(Date.now() - 7*24*60*60*1000).toISOString())
+      .in('orders.status', ['confirmed','delivered','ai_verified']);
+      
+    const itemsMap = {};
+    (data || []).forEach(oi => {
+      if(!itemsMap[oi.menu_item_id]) {
+        itemsMap[oi.menu_item_id] = { name_uz: oi.name_uz, total_qty: 0, revenue: 0 };
+      }
+      itemsMap[oi.menu_item_id].total_qty += oi.quantity;
+      itemsMap[oi.menu_item_id].revenue += (oi.quantity * oi.price);
+    });
+    return Object.values(itemsMap).sort((a,b) => b.total_qty - a.total_qty).slice(0, 10);
+  }
 };
 
-// ──────────────────────────────────────────────────────────────
-// TRANSACTIONS
-// ──────────────────────────────────────────────────────────────
-const createOrderTransaction = db.transaction((userId, mode, total, items) => {
-  const orderResult = orderQueries.create.run({ user_id: userId, mode, total });
-  const orderId = orderResult.lastInsertRowid;
-
+const createOrderTransaction = async (userId, mode, total, items) => {
+  const order = await orderQueries.create({ user_id: userId, mode, total });
   for (const item of items) {
-    orderQueries.addItem.run({
-      order_id: orderId,
+    await orderQueries.addItem({
+      order_id: order.id,
       item_id: item.id,
       name_uz: item.name_uz,
       quantity: item.quantity,
-      price: item.price,
+      price: item.price
     });
   }
-
-  return orderId;
-});
+  return order.id;
+};
 
 module.exports = {
-  db,
+  supabase,
   userQueries,
   menuQueries,
   orderQueries,
-  createOrderTransaction,
+  createOrderTransaction
 };

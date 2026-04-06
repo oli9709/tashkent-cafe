@@ -48,8 +48,8 @@ router.use(express.json());
 // ─────────────────────────────────────────────────────────────
 // MENU
 // ─────────────────────────────────────────────────────────────
-router.get('/menu', (req, res) => {
-  const items = menuQueries.getAll.all();
+router.get('/menu', async (req, res) => {
+  const items = await menuQueries.getAll();
   res.json({ ok: true, items });
 });
 
@@ -69,13 +69,13 @@ router.post('/orders', async (req, res) => {
   }
 
   // Upsert user
-  userQueries.upsert.run({ telegram_id, name: name || null, username: username || null });
-  const user = userQueries.findByTelegramId.get(telegram_id);
+  await userQueries.upsert({ telegram_id, name: name || null, username: username || null });
+  const user = await userQueries.findByTelegramId(telegram_id);
 
   // Validate items exist and not sold out
   const enrichedItems = [];
   for (const cartItem of items) {
-    const menuItem = menuQueries.getById.get(cartItem.id);
+    const menuItem = await menuQueries.getById(cartItem.id);
     if (!menuItem) return res.status(400).json({ ok: false, error: `Item ${cartItem.id} not found` });
     if (menuItem.is_sold_out) return res.status(400).json({ ok: false, error: `${menuItem.name_uz} tugadi (sold out)` });
     enrichedItems.push({
@@ -87,11 +87,11 @@ router.post('/orders', async (req, res) => {
   }
 
   const total = enrichedItems.reduce((sum, i) => sum + i.price * i.quantity, 0);
-  const orderId = createOrderTransaction(user.id, mode, total, enrichedItems);
+  const orderId = await createOrderTransaction(user.id, mode, total, enrichedItems);
 
   // Fetch full order for notification
-  const order = orderQueries.getById.get(orderId);
-  const orderItems = orderQueries.getItemsByOrderId.all(orderId);
+  const order = await orderQueries.getById(orderId);
+  const orderItems = await orderQueries.getItemsByOrderId(orderId);
 
   // Notify admin
   await notifyAdminNewOrder(order, orderItems);
@@ -99,7 +99,7 @@ router.post('/orders', async (req, res) => {
   broadcastSSE('new_order', { order, items: orderItems });
 
   // Update last_order_id for "My Regular Order"
-  userQueries.updateLastOrder.run(orderId, telegram_id);
+  await userQueries.updateLastOrder(orderId, telegram_id);
 
   res.json({
     ok: true,
@@ -109,8 +109,8 @@ router.post('/orders', async (req, res) => {
     bank_account: mode === 'togo' ? BANK_ACCOUNT : null,
     bank_owner: mode === 'togo' ? BANK_OWNER : null,
     message: mode === 'bozor'
-      ? 'Buyurtmangiz qabul qilindi! Yetkazib berilganda naqd to\'laysiz.'
-      : 'To\'lov skrinshotini yuboring!',
+      ? "Buyurtmangiz qabul qilindi! Yetkazib berilganda naqd to'laysiz."
+      : "To'lov skrinshotini yuboring!",
   });
 });
 
@@ -121,23 +121,23 @@ router.post('/orders/:id/payment', upload.single('screenshot'), async (req, res)
 
   if (!req.file) return res.status(400).json({ ok: false, error: 'Screenshot required' });
 
-  const order = orderQueries.getById.get(id);
+  const order = await orderQueries.getById(id);
   if (!order) return res.status(404).json({ ok: false, error: 'Order not found' });
-  if (order.telegram_id !== telegram_id) return res.status(403).json({ ok: false, error: 'Forbidden' });
+  if (String(order.telegram_id) !== String(telegram_id)) return res.status(403).json({ ok: false, error: 'Forbidden' });
 
   const screenshotPath = req.file.path;
-  orderQueries.updatePayment.run({ screenshot: screenshotPath, id });
+  await orderQueries.updatePayment({ screenshot: screenshotPath, id });
 
   // Run AI verification asynchronously
   verifyPaymentScreenshot(screenshotPath, order.total).then(async (aiResult) => {
-    orderQueries.updateAiResult.run({
+    await orderQueries.updateAiResult({
       ai_verified: aiResult.verified ? 1 : 0,
       ai_amount: aiResult.extractedAmount,
       ai_confidence: aiResult.confidence,
       id,
     });
 
-    const updatedOrder = orderQueries.getById.get(id);
+    const updatedOrder = await orderQueries.getById(id);
     await notifyAdminPaymentVerified(updatedOrder, aiResult);
     broadcastSSE('order_updated', { order: updatedOrder, ai: aiResult });
   }).catch(err => console.error('[API] Vision error:', err));
@@ -146,14 +146,14 @@ router.post('/orders/:id/payment', upload.single('screenshot'), async (req, res)
 });
 
 /** GET /api/orders/my-last — last successful order for "My Regular Order" */
-router.get('/orders/my-last', (req, res) => {
+router.get('/orders/my-last', async (req, res) => {
   const { telegram_id } = req.query;
   if (!telegram_id) return res.status(400).json({ ok: false });
 
-  const order = orderQueries.getLastSuccessful.get(telegram_id);
+  const order = await orderQueries.getLastSuccessful(telegram_id);
   if (!order) return res.json({ ok: true, order: null });
 
-  const items = orderQueries.getItemsByOrderId.all(order.id);
+  const items = await orderQueries.getItemsByOrderId(order.id);
   res.json({ ok: true, order, items });
 });
 
@@ -162,12 +162,12 @@ router.get('/orders/my-last', (req, res) => {
 // ─────────────────────────────────────────────────────────────
 
 /** GET /api/admin/orders */
-router.get('/admin/orders', (req, res) => {
-  const orders = orderQueries.getAll.all();
-  const result = orders.map(o => ({
+router.get('/admin/orders', async (req, res) => {
+  const orders = await orderQueries.getAll();
+  const result = await Promise.all(orders.map(async o => ({
     ...o,
-    items: orderQueries.getItemsByOrderId.all(o.id),
-  }));
+    items: await orderQueries.getItemsByOrderId(o.id),
+  })));
   res.json({ ok: true, orders: result });
 });
 
@@ -179,8 +179,8 @@ router.put('/admin/orders/:id/status', async (req, res) => {
   const allowed = ['confirmed', 'rejected', 'delivered', 'pending'];
   if (!allowed.includes(status)) return res.status(400).json({ ok: false, error: 'Invalid status' });
 
-  orderQueries.updateStatus.run({ status, id });
-  const order = orderQueries.getById.get(id);
+  await orderQueries.updateStatus({ status, id });
+  const order = await orderQueries.getById(id);
 
   broadcastSSE('order_updated', { order });
 
@@ -192,21 +192,21 @@ router.put('/admin/orders/:id/status', async (req, res) => {
 });
 
 /** PUT /api/admin/menu/:id/sold-out */
-router.put('/admin/menu/:id/sold-out', (req, res) => {
+router.put('/admin/menu/:id/sold-out', async (req, res) => {
   const { id } = req.params;
   const { is_sold_out } = req.body;
 
-  menuQueries.toggleSoldOut.run(is_sold_out ? 1 : 0, id);
-  const item = menuQueries.getById.get(id);
+  await menuQueries.toggleSoldOut(is_sold_out ? 1 : 0, id);
+  const item = await menuQueries.getById(id);
 
   broadcastSSE('menu_updated', { item });
   res.json({ ok: true, item });
 });
 
 /** GET /api/admin/analytics */
-router.get('/admin/analytics', (req, res) => {
-  const weekly = orderQueries.getWeeklyAnalytics.all();
-  const topItems = orderQueries.getTopItems.all();
+router.get('/admin/analytics', async (req, res) => {
+  const weekly = await orderQueries.getWeeklyAnalytics();
+  const topItems = await orderQueries.getTopItems();
   res.json({ ok: true, weekly, topItems });
 });
 

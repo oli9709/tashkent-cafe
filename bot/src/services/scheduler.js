@@ -22,7 +22,7 @@ function startScheduler() {
       }
 
       try {
-        const bozorUsers = userQueries.getAllBozorUsers.all();
+        const bozorUsers = await userQueries.getAllBozorUsers();
         console.log(`[Scheduler] Found ${bozorUsers.length} bozor users today`);
 
         for (const user of bozorUsers) {
