@@ -50,4 +50,25 @@ function startScheduler() {
   console.log(`[Scheduler] ✅ Bozor 6:00 AM cron started (KST) — pattern: ${BOZOR_REMINDER_CRON}`);
 }
 
-module.exports = { startScheduler, setBotInstance };
+/**
+ * Keep-alive mechanism to prevent server from sleeping
+ */
+function startKeepAlive() {
+  const { MINI_APP_URL } = require('../config');
+  // Hugging Face or other hosting URL
+  const url = MINI_APP_URL.replace('/mini-app', '').replace(/\/$/, '') + '/health';
+  
+  // Every 5 minutes
+  cron.schedule('*/5 * * * *', async () => {
+    try {
+      const axios = require('axios');
+      await axios.get(url);
+      console.log(`[Keep-Alive] 💓 Ping sent to ${url}`);
+    } catch (err) {
+      console.error(`[Keep-Alive] 💔 Ping failed:`, err.message);
+    }
+  });
+  console.log(`[Keep-Alive] 🚀 Monitoring started for: ${url}`);
+}
+
+module.exports = { startScheduler, setBotInstance, startKeepAlive };

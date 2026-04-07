@@ -7,7 +7,7 @@ const { Telegraf } = require('telegraf');
 const { BOT_TOKEN, PORT, UPLOADS_DIR } = require('./config');
 const { router } = require('./api');
 const { setBotInstance } = require('./services/notify');
-const { startScheduler, setBotInstance: setSchedulerBot } = require('./services/scheduler');
+const { startScheduler, setBotInstance: setSchedulerBot, startKeepAlive } = require('./services/scheduler');
 const { registerHandlers } = require('./handlers/bot');
 
 // ── Validate required env ──────────────────────────────────
@@ -58,6 +58,9 @@ async function main() {
 
   // Start cron scheduler
   startScheduler();
+
+  // Start keep-alive monitor
+  startKeepAlive();
 
   // Launch bot (long-polling)
   await bot.launch();
