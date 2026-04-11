@@ -42,7 +42,11 @@ async function verifyReceiptWithAI(buffer: ArrayBuffer) {
 // ── Notification Helpers ─────────────────────────────────────
 async function notifyAdmin(order: any, items: any[]) {
   const adminId = Deno.env.get("ADMIN_CHAT_ID");
-  if (!adminId) return;
+  
+  if (!adminId || adminId === "0" || adminId === "undefined" || adminId === "null") {
+    console.error("[NotifyAdmin] Admin Chat ID is missing or invalid:", adminId);
+    return;
+  }
 
   const itemsList = items.map(i => `• ${i.name_uz} x${i.quantity}`).join("\n");
   const text = `🆕 YANNGI BUYURTMA (#${order.id})\n\n` +
@@ -52,7 +56,13 @@ async function notifyAdmin(order: any, items: any[]) {
                `🍱 Taomlar:\n${itemsList}\n\n` +
                `Status: ${order.status}`;
   
-  await bot.api.sendMessage(adminId, text);
+  try {
+    await bot.api.sendMessage(adminId, text);
+    console.log(`[NotifyAdmin] Successfully notified admin: ${adminId}`);
+  } catch (err: any) {
+    console.error(`[NotifyAdmin] Failed to send message to admin (${adminId}):`, err.message);
+    // If it's a 400 error, it likely means the admin hasn't started the bot or ID is wrong
+  }
 }
 
 // ── Bot Handlers ───────────────────────────────────────────
@@ -186,16 +196,30 @@ async function handleApi(req: Request): Promise<Response> {
       await supabase.from("order_items").insert(orderItems);
 
       // Notify
-      await notifyAdmin(order, orderItems);
+      try {
+        await notifyAdmin(order, orderItems);
+      } catch (err: any) {
+        console.error("[POST /orders] Admin notification failed:", err.message);
+      }
       
       if (mode === "togo") {
-        await bot.api.sendMessage(telegram_id, 
-          `💰 Buyurtma qabul qilindi (#${order.id})\n\n` +
-          `Summa: ${total}₩\n` +
-          `Bank: ${BANK_ACCOUNT}\n` +
-          `Ega: ${BANK_OWNER}\n\n` +
-          `Iltimos, to'lov skrinshotini shu yerga rasm qilib yuboring.`
-        );
+        if (telegram_id && telegram_id !== 0 && telegram_id !== "0") {
+          try {
+            await bot.api.sendMessage(telegram_id, 
+              `💰 Buyurtma qabul qilindi (#${order.id})\n\n` +
+              `Summa: ${total}₩\n` +
+              `Bank: ${BANK_ACCOUNT}\n` +
+              `Ega: ${BANK_OWNER}\n\n` +
+              `Iltimos, to'lov skrinshotini shu yerga rasm qilib yuboring.`
+            );
+            console.log(`[POST /orders] Success message sent to user: ${telegram_id}`);
+          } catch (err: any) {
+            console.error(`[POST /orders] Failed to send message to user (${telegram_id}):`, err.message);
+            // Don't throw here, as the order is already created in DB
+          }
+        } else {
+          console.warn("[POST /orders] telegram_id is missing or invalid, skipping user message:", telegram_id);
+        }
       }
 
       return new Response(JSON.stringify({ ok: true, order_id: order.id, total }), { headers });

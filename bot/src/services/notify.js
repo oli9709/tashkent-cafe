@@ -15,7 +15,10 @@ const won = (n) => `${Number(n).toLocaleString('ko-KR')}₩`;
  * Sends a message with inline buttons: Confirm / Reject
  */
 async function notifyAdminNewOrder(order, items) {
-  if (!botInstance || !ADMIN_CHAT_ID) return;
+  if (!botInstance || !ADMIN_CHAT_ID) {
+    console.error("[NotifyAdmin] Bot instance or ADMIN_CHAT_ID missing:", { botInstance: !!botInstance, ADMIN_CHAT_ID });
+    return;
+  }
 
   const modeLabel = order.mode === 'togo' ? '🛍 Olib ketish' : '🌅 Bozorga (5:00 yetkazish)';
   const itemLines = items.map(i => `  • ${i.name_uz} ×${i.quantity} — ${won(i.price * i.quantity)}`).join('\\n');
@@ -28,24 +31,32 @@ async function notifyAdminNewOrder(order, items) {
     `💰 Jami: <b>${won(order.total)}</b>\\n` +
     `📅 Vaqt: ${new Date().toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul' })}`;
 
-  await botInstance.telegram.sendMessage(ADMIN_CHAT_ID, text, {
-    parse_mode: 'HTML',
-    reply_markup: {
-      inline_keyboard: [
-        [
-          { text: '✅ Tasdiqlash', callback_data: `approve_${order.id}` },
-          { text: '❌ Rad etish', callback_data: `reject_${order.id}` },
+  try {
+    await botInstance.telegram.sendMessage(ADMIN_CHAT_ID, text, {
+      parse_mode: 'HTML',
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: '✅ Tasdiqlash', callback_data: `approve_${order.id}` },
+            { text: '❌ Rad etish', callback_data: `reject_${order.id}` },
+          ],
         ],
-      ],
-    },
-  });
+      },
+    });
+    console.log(`[NotifyAdmin] Successfully notified admin: ${ADMIN_CHAT_ID}`);
+  } catch (err) {
+    console.error(`[NotifyAdmin] Failed to send message to admin (${ADMIN_CHAT_ID}):`, err.message);
+  }
 }
 
 /**
  * Notify admin about AI verification result for a payment screenshot.
  */
 async function notifyAdminPaymentVerified(order, aiResult) {
-  if (!botInstance || !ADMIN_CHAT_ID) return;
+  if (!botInstance || !ADMIN_CHAT_ID) {
+    console.error("[NotifyAdminPayment] Bot instance or ADMIN_CHAT_ID missing");
+    return;
+  }
 
   const statusIcon = aiResult.verified ? '✅' : '⚠️';
   const statusText = aiResult.verified ? "AI tasdiqladi" : "Qo'lda tekshiring";
@@ -57,17 +68,21 @@ async function notifyAdminPaymentVerified(order, aiResult) {
     `👤 Qabul qiluvchi: ${aiResult.extractedName || 'topilmadi'}\\n` +
     `📊 Ishonchlilik: ${Math.round((aiResult.confidence || 0) * 100)}%\\n`;
 
-  await botInstance.telegram.sendMessage(ADMIN_CHAT_ID, text, {
-    parse_mode: 'HTML',
-    reply_markup: !aiResult.verified ? {
-      inline_keyboard: [
-        [
-          { text: "✅ Qo'lda tasdiqlash", callback_data: `approve_${order.id}` },
-          { text: "❌ Rad etish", callback_data: `reject_${order.id}` },
+  try {
+    await botInstance.telegram.sendMessage(ADMIN_CHAT_ID, text, {
+      parse_mode: 'HTML',
+      reply_markup: !aiResult.verified ? {
+        inline_keyboard: [
+          [
+            { text: "✅ Qo'lda tasdiqlash", callback_data: `approve_${order.id}` },
+            { text: "❌ Rad etish", callback_data: `reject_${order.id}` },
+          ],
         ],
-      ],
-    } : undefined,
-  });
+      } : undefined,
+    });
+  } catch (err) {
+    console.error(`[NotifyAdminPayment] Failed to send message to admin (${ADMIN_CHAT_ID}):`, err.message);
+  }
 }
 
 /**
