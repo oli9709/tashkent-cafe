@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const api = axios.create({
-  baseURL: 'https://adammardanov-tashkent-cafe-bot.hf.space/api',
+  baseURL: 'https://iznzvrtzijkgklketlkc.supabase.co/functions/v1/telegram-bot/api',
   timeout: 30000,
 });
 
