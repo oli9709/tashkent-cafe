@@ -30,7 +30,7 @@ export default function CartPage() {
         name: user.name,
         username: user.username,
         mode,
-        items: items.map(i => ({ id: i.id, quantity: i.quantity })),
+        items: items.map(i => ({ id: i.id, quantity: i.quantity, price: i.price, name_uz: i.name_uz })),
         bank_account: '1000-7590-5938',
         bank_owner: 'TURSUNOV UMIDJON'
       });

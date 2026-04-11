@@ -158,7 +158,13 @@ async function handleApi(req: Request): Promise<Response> {
 
       if (!user) throw new Error("User creation failed");
 
-      const total = items.reduce((sum: number, i: any) => sum + (i.price * i.quantity), 0);
+      console.log("Order items received:", items);
+      const total = items.reduce((sum: number, i: any) => sum + (Number(i.price || 0) * Number(i.quantity || 1)), 0);
+      console.log("Calculated total:", total);
+
+      if (isNaN(total) || total <= 0) {
+        throw new Error("Buyurtma summasi neto'g'ri (Total is invalid)");
+      }
       
       const { data: order, error: orderErr } = await supabase.from("orders").insert({
         user_id: user.id,
