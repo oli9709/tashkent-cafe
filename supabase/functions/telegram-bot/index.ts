@@ -100,7 +100,7 @@ bot.command("start", (ctx) => {
     "💳 To'lovni amalga oshirgach, chekni shu yerga rasm qilib yuboring.",
     {
       reply_markup: {
-        inline_keyboard: [[{ text: "🍴 Menyu", web_app: { url: Deno.env.get("MINI_APP_URL") || "" } }]]
+        inline_keyboard: [[{ text: "🍴 Menyu", web_app: { url: "https://tashkent-cafe.vercel.app/" } }]]
       }
     }
   );

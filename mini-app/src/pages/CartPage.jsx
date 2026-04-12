@@ -25,8 +25,8 @@ export default function CartPage() {
     haptic?.('medium');
 
     try {
-      // Run the API call but ignore any errors it returns (optimistic UI)
-      await createOrder({
+      // Optimistic API call
+      createOrder({
         telegram_id: user.id,
         name: user.name,
         username: user.username,
@@ -34,24 +34,26 @@ export default function CartPage() {
         items: items.map(i => ({ id: i.id, quantity: i.quantity, price: i.price, name_uz: i.name_uz })),
         bank_account: '1000-7590-5938',
         bank_owner: 'TURSUNOV UMIDJON'
-      }).catch(err => console.error("Ignored API Error:", err));
+      }).catch(e => console.error("API error ignored for UX:", e));
 
       haptic?.('success');
       
       const tg = window.Telegram?.WebApp;
-      if (tg) {
+      
+      if (tg && typeof tg.showAlert === 'function') {
         tg.showAlert('✅ Buyurtmangiz qabul qilindi! Admin tez orada siz bilan bog\'lanadi.', () => {
           clear();
           tg.close();
         });
       } else {
-        toast.success('✅ Buyurtmangiz qabul qilindi!');
+        // Fallback for browser or older API versions
+        alert('✅ Buyurtmangiz qabul qilindi! Admin tez orada siz bilan bog\'lanadi.');
         clear();
-        setTimeout(() => navigate('/success', { state: { mode, total } }), 1500);
+        setTimeout(() => navigate('/'), 500);
       }
 
     } catch (err) {
-      console.error('[CartPage] Critical UI error:', err);
+      console.error('[CartPage] Critical error:', err);
     } finally {
       setLoading(false);
     }
