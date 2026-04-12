@@ -1,4 +1,4 @@
-import { Bot, webhookCallback } from "https://esm.sh/grammy@1.34.0";
+import { Bot, webhookCallback, InlineKeyboard } from "https://esm.sh/grammy@1.34.0";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
 
 // ── Environment Variables ──────────────────────────────────
@@ -40,28 +40,35 @@ async function verifyReceiptWithAI(buffer: ArrayBuffer) {
 }
 
 // ── Notification Helpers ─────────────────────────────────────
-async function notifyAdmin(order: any, items: any[]) {
+async function notifyAdmin(order: any, items: any[], photoId?: string) {
   const adminId = Deno.env.get("ADMIN_CHAT_ID");
   
-  if (!adminId || adminId === "0" || adminId === "undefined" || adminId === "null") {
-    console.error("[NotifyAdmin] Admin Chat ID is missing or invalid:", adminId);
+  if (!adminId || adminId === "0") {
+    console.error("[NotifyAdmin] Admin Chat ID is missing or invalid");
     return;
   }
 
   const itemsList = items.map(i => `• ${i.name_uz} x${i.quantity}`).join("\n");
-  const text = `🆕 YANNGI BUYURTMA (#${order.id})\n\n` +
-               `👤 Mijoz ID: ${order.user_id}\n` +
-               `📍 Rejim: ${order.mode === "togo" ? "Olib ketish" : "Bozor"}\n` +
-               `💰 Umumiy: ${order.total}₩\n\n` +
-               `🍱 Taomlar:\n${itemsList}\n\n` +
-               `Status: ${order.status}`;
+  const text = `📦 *YANGI BUYURTMA (#${order.id})*\n\n` +
+               `👤 *Mijoz:* ${order.user_id}\n` +
+               `📍 *Rejim:* ${order.mode === "togo" || order.mode === "pickup" ? "🥡 Olib ketish" : "🛵 Bozor"}\n` +
+               `💰 *Jami summa:* ${order.total}₩\n\n` +
+               `🍴 *Taomlar:* \n${itemsList}\n\n` +
+               `⏱ *Status:* ${order.status}\n` +
+               (order.payment_screenshot ? `🖼 *Chek yuklangan*` : `⏳ *To'lov kutilmoqda*`);
+
+  const keyboard = new InlineKeyboard()
+    .text("✅ Qabul qilish", `approve_order_${order.id}`)
+    .text("❌ Bekor qilish", `reject_order_${order.id}`);
   
   try {
-    await bot.api.sendMessage(adminId, text);
-    console.log(`[NotifyAdmin] Successfully notified admin: ${adminId}`);
+    if (photoId) {
+      await bot.api.sendPhoto(adminId, photoId, { caption: text, reply_markup: keyboard });
+    } else {
+      await bot.api.sendMessage(adminId, text, { reply_markup: keyboard });
+    }
   } catch (err: any) {
-    console.error(`[NotifyAdmin] Failed to send message to admin (${adminId}):`, err.message);
-    // If it's a 400 error, it likely means the admin hasn't started the bot or ID is wrong
+    console.error(`[NotifyAdmin] Failed:`, err.message);
   }
 }
 
@@ -94,7 +101,7 @@ bot.on("message:photo", async (ctx) => {
       .from("orders")
       .select("*")
       .eq("user_id", user.id)
-      .eq("status", "pending")
+      .or("status.eq.pending,status.eq.payment_uploaded") // Allow re-upload if needed
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -118,17 +125,58 @@ bot.on("message:photo", async (ctx) => {
       payment_screenshot: fileName,
       ai_amount: aiResult.amount,
       ai_verified: isVerified,
-      status: isVerified ? "confirmed" : "payment_uploaded"
+      status: isVerified ? "payment_uploaded" : "payment_uploaded" // Keep as uploaded for admin review
     }).eq("id", order.id);
 
     if (isVerified) {
-      await ctx.reply(`✅ To'lov tasdiqlandi! (${aiResult.amount}₩)\nBuyurtmangiz tayyorlanmoqda.`);
+      await ctx.reply(`✅ To'lov AI tomonidan tasdiqlandi! (${aiResult.amount}₩).\nAdmin buyurtmani ko'rib chiqmoqda.`);
     } else {
-      await ctx.reply(`⚠️ Summa mos kelmadi. Kutilgan: ${order.total}₩, Topilgan: ${aiResult.amount}₩. Admin tekshiradi.`);
+      await ctx.reply(`⚠️ To'lov summasida farq bor (AI: ${aiResult.amount}₩). Admin qo'lda tekshiradi.`);
     }
+
+    // Forward to admin REGARDLESS of AI result
+    const { data: items } = await supabase.from("order_items").select("*").eq("order_id", order.id);
+    await notifyAdmin(order, items || [], photo.file_id);
+
   } catch (err) {
     console.error(err);
     await ctx.reply("Xatolik yuz berdi.");
+  }
+});
+
+// ── Admin Action Handlers ────────────────────────────────────
+
+bot.callbackQuery(/approve_order_(\d+)/, async (ctx) => {
+  const orderId = ctx.match[1];
+  try {
+    const { data: order } = await supabase.from("orders").update({ status: "confirmed" }).eq("id", orderId).select("*, users(telegram_id)").single();
+    if (!order) return ctx.answerCallbackQuery({ text: "Buyurtma topilmadi." });
+
+    const userTgId = order.users.telegram_id;
+    await bot.api.sendMessage(userTgId, `✅ Buyurtmangiz (#${orderId}) admin tomonidan tasdiqlandi va tayyorlanmoqda!`);
+    
+    await ctx.editMessageCaption({ caption: ctx.callbackQuery.message?.caption + "\n\n✅ TASDIQLANDI" });
+    await ctx.answerCallbackQuery({ text: "Buyurtma tasdiqlandi!" });
+  } catch (err: any) {
+    console.error(err);
+    await ctx.answerCallbackQuery({ text: "Xatolik yuz berdi." });
+  }
+});
+
+bot.callbackQuery(/reject_order_(\d+)/, async (ctx) => {
+  const orderId = ctx.match[1];
+  try {
+    const { data: order } = await supabase.from("orders").update({ status: "cancelled" }).eq("id", orderId).select("*, users(telegram_id)").single();
+    if (!order) return ctx.answerCallbackQuery({ text: "Buyurtma topilmadi." });
+
+    const userTgId = order.users.telegram_id;
+    await bot.api.sendMessage(userTgId, `❌ Buyurtmangiz (#${orderId}) bekor qilindi. Iltimos, to'lov cheki to'g'riligini tekshiring yoki qayta yuboring.`);
+    
+    await ctx.editMessageCaption({ caption: ctx.callbackQuery.message?.caption + "\n\n❌ BEKOR QILINDI" });
+    await ctx.answerCallbackQuery({ text: "Buyurtma bekor qilindi." });
+  } catch (err: any) {
+    console.error(err);
+    await ctx.answerCallbackQuery({ text: "Xatolik yuz berdi." });
   }
 });
 
@@ -301,7 +349,8 @@ async function handleApi(req: Request): Promise<Response> {
       // Notify Admin
       try {
         const { data: items } = await supabase.from("order_items").select("*").eq("order_id", orderId);
-        await notifyAdmin(order, items || []);
+        const { data: { publicUrl } } = supabase.storage.from("payments").getPublicUrl(fileName);
+        await notifyAdmin(order, items || [], publicUrl);
       } catch (err: any) {
         console.error("[API /payment] Admin notification failed:", err.message);
       }

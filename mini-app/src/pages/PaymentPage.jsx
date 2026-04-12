@@ -40,7 +40,19 @@ export default function PaymentPage() {
       await uploadPayment(orderId, file, user.id);
       setUploaded(true);
       haptic?.('success');
+      toast.success('✅ Skrinshot yuborildi! Admin tasdiqlashini kuting.', { duration: 2000 });
       clear();
+
+      // Mini Appni yopish
+      setTimeout(() => {
+        const tg = window.Telegram?.WebApp;
+        if (tg) {
+          tg.close();
+        } else {
+          navigate('/');
+        }
+      }, 2000);
+
     } catch (err) {
       toast.error("Yuklashda xatolik. Qayta urinib ko'ring.");
       haptic?.('error');
