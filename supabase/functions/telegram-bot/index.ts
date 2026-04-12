@@ -49,13 +49,25 @@ async function notifyAdmin(order: any, items: any[], photoId?: string) {
   }
 
   const itemsList = items.map(i => `• ${i.name_uz} x${i.quantity}`).join("\n");
-  const text = `📦 *YANGI BUYURTMA (#${order.id})*\n\n` +
-               `👤 *Mijoz:* ${order.user_id}\n` +
-               `📍 *Rejim:* ${order.mode === "togo" || order.mode === "pickup" ? "🥡 Olib ketish" : "🛵 Bozor"}\n` +
-               `💰 *Jami summa:* ${order.total}₩\n\n` +
-               `🍴 *Taomlar:* \n${itemsList}\n\n` +
-               `⏱ *Status:* ${order.status}\n` +
-               (order.payment_screenshot ? `🖼 *Chek yuklangan*` : `⏳ *To'lov kutilmoqda*`);
+  
+  let customerLink = "";
+  if (order.users) {
+    if (order.users.username) {
+      customerLink = `<a href="https://t.me/${order.users.username}">@${order.users.username}</a>`;
+    } else {
+      customerLink = `<a href="tg://user?id=${order.users.telegram_id}">${order.users.name || 'Mijoz'}</a>`;
+    }
+  } else {
+    customerLink = `ID: ${order.user_id}`;
+  }
+
+  const text = `📦 <b>YANGI BUYURTMA (#${order.id})</b>\n\n` +
+               `👤 <b>Mijoz:</b> ${customerLink}\n` +
+               `📍 <b>Rejim:</b> ${order.mode === "togo" || order.mode === "pickup" ? "🥡 Olib ketish" : "🛵 Bozor"}\n` +
+               `💰 <b>Jami summa:</b> ${order.total}₩\n\n` +
+               `🍴 <b>Taomlar:</b> \n${itemsList}\n\n` +
+               `⏱ <b>Status:</b> ${order.status}\n` +
+               (order.payment_screenshot ? `🖼 <b>Chek yuklangan</b>` : `⏳ <b>To'lov kutilmoqda</b>`);
 
   const keyboard = new InlineKeyboard()
     .text("✅ Qabul qilish", `approve_order_${order.id}`)
@@ -63,9 +75,16 @@ async function notifyAdmin(order: any, items: any[], photoId?: string) {
   
   try {
     if (photoId) {
-      await bot.api.sendPhoto(adminId, photoId, { caption: text, reply_markup: keyboard });
+      await bot.api.sendPhoto(adminId, photoId, { 
+        caption: text, 
+        reply_markup: keyboard,
+        parse_mode: "HTML" 
+      });
     } else {
-      await bot.api.sendMessage(adminId, text, { reply_markup: keyboard });
+      await bot.api.sendMessage(adminId, text, { 
+        reply_markup: keyboard,
+        parse_mode: "HTML"
+      });
     }
   } catch (err: any) {
     console.error(`[NotifyAdmin] Failed:`, err.message);
@@ -136,7 +155,8 @@ bot.on("message:photo", async (ctx) => {
 
     // Forward to admin REGARDLESS of AI result
     const { data: items } = await supabase.from("order_items").select("*").eq("order_id", order.id);
-    await notifyAdmin(order, items || [], photo.file_id);
+    const { data: orderWithUser } = await supabase.from("orders").select("*, users(*)").eq("id", order.id).single();
+    await notifyAdmin(orderWithUser || order, items || [], photo.file_id);
 
   } catch (err) {
     console.error(err);
@@ -155,7 +175,22 @@ bot.callbackQuery(/approve_order_(\d+)/, async (ctx) => {
     const userTgId = order.users.telegram_id;
     await bot.api.sendMessage(userTgId, `✅ Buyurtmangiz (#${orderId}) admin tomonidan tasdiqlandi va tayyorlanmoqda!`);
     
-    await ctx.editMessageCaption({ caption: ctx.callbackQuery.message?.caption + "\n\n✅ TASDIQLANDI" });
+    // Update admin message
+    const msg = ctx.callbackQuery.message;
+    const suffix = "\n\n✅ TASDIQLANDI";
+    
+    try {
+      if (msg?.photo) {
+        const currentCaption = msg.caption || "";
+        await ctx.editMessageCaption({ caption: currentCaption + suffix });
+      } else {
+        const currentText = msg?.text || "";
+        await ctx.editMessageText(currentText + suffix);
+      }
+    } catch (e) {
+      console.error("Failed to edit admin message:", e);
+    }
+
     await ctx.answerCallbackQuery({ text: "Buyurtma tasdiqlandi!" });
   } catch (err: any) {
     console.error(err);
@@ -172,7 +207,22 @@ bot.callbackQuery(/reject_order_(\d+)/, async (ctx) => {
     const userTgId = order.users.telegram_id;
     await bot.api.sendMessage(userTgId, `❌ Buyurtmangiz (#${orderId}) bekor qilindi. Iltimos, to'lov cheki to'g'riligini tekshiring yoki qayta yuboring.`);
     
-    await ctx.editMessageCaption({ caption: ctx.callbackQuery.message?.caption + "\n\n❌ BEKOR QILINDI" });
+    // Update admin message
+    const msg = ctx.callbackQuery.message;
+    const suffix = "\n\n❌ BEKOR QILINDI";
+    
+    try {
+      if (msg?.photo) {
+        const currentCaption = msg.caption || "";
+        await ctx.editMessageCaption({ caption: currentCaption + suffix });
+      } else {
+        const currentText = msg?.text || "";
+        await ctx.editMessageText(currentText + suffix);
+      }
+    } catch (e) {
+      console.error("Failed to edit admin message:", e);
+    }
+
     await ctx.answerCallbackQuery({ text: "Buyurtma bekor qilindi." });
   } catch (err: any) {
     console.error(err);
@@ -213,12 +263,16 @@ async function handleApi(req: Request): Promise<Response> {
       const { telegram_id, name, username, mode, items } = body;
 
       // Upsert user
-      const { data: user } = await supabase.from("users").upsert(
+      const { data: user, error: userErr } = await supabase.from("users").upsert(
         { telegram_id, name, username },
         { onConflict: "telegram_id" }
       ).select().single();
 
-      if (!user) throw new Error("User creation failed");
+      if (userErr) {
+        console.error("User upsert error:", userErr);
+        throw new Error(`Foydalanuvchi ma'lumotlarini saqlashda xatolik: ${userErr.message}`);
+      }
+      if (!user) throw new Error("Foydalanuvchi yaratilmadi (User creation failed)");
 
       console.log("Order items received:", items);
       const total = items.reduce((sum: number, i: any) => sum + (Number(i.price || 0) * Number(i.quantity || 1)), 0);
@@ -233,7 +287,7 @@ async function handleApi(req: Request): Promise<Response> {
         mode,
         total,
         status: "pending"
-      }).select().single();
+      }).select("*, users(*)").single();
 
       if (orderErr) throw orderErr;
 
@@ -318,7 +372,7 @@ async function handleApi(req: Request): Promise<Response> {
       if (storageErr) throw storageErr;
 
       // Get order data
-      const { data: order } = await supabase.from("orders").select("*").eq("id", orderId).single();
+      const { data: order } = await supabase.from("orders").select("*, users(*)").eq("id", orderId).single();
       if (!order) throw new Error("Order not found");
 
       // AI Verification
