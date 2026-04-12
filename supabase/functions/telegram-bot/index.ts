@@ -136,8 +136,12 @@ bot.on("message:photo", async (ctx) => {
 
 async function handleApi(req: Request): Promise<Response> {
   const url = new URL(req.url);
-  const path = url.pathname.replace("/telegram-bot/api", "").replace("/api", "");
+  // Extract path after /api (e.g., /functions/v1/telegram-bot/api/menu -> /menu)
+  const apiMatch = url.pathname.match(/\/api(.*)/);
+  const path = apiMatch ? apiMatch[1] : url.pathname;
   
+  console.log(`[API] Path: ${path}, Method: ${req.method}`);
+
   // CORS Headers
   const headers = new Headers({
     "Access-Control-Allow-Origin": "*",
@@ -228,6 +232,8 @@ async function handleApi(req: Request): Promise<Response> {
     // 3. GET /orders/my-last
     if (path === "/orders/my-last" && req.method === "GET") {
       const telegramId = url.searchParams.get("telegram_id");
+      if (!telegramId) return new Response(JSON.stringify({ error: "telegram_id missing" }), { status: 400, headers });
+
       const { data: user } = await supabase.from("users").select("id").eq("telegram_id", telegramId).single();
       if (!user) return new Response(JSON.stringify({ ok: true, order: null }), { headers });
 
@@ -239,6 +245,68 @@ async function handleApi(req: Request): Promise<Response> {
         .maybeSingle();
 
       return new Response(JSON.stringify({ ok: true, order, items: order?.order_items || [] }), { headers });
+    }
+
+    // 4. POST /orders/:id/payment (Upload screenshot from Mini App)
+    const paymentMatch = path.match(/\/orders\/(\d+)\/payment/);
+    if (paymentMatch && req.method === "POST") {
+      const orderId = paymentMatch[1];
+      const formData = await req.formData();
+      const file = formData.get("screenshot") as File;
+      const telegram_id = formData.get("telegram_id");
+
+      if (!file) throw new Error("Screenshot missing");
+
+      console.log(`[API /payment] Uploading for order #${orderId}, user: ${telegram_id}`);
+
+      const arrayBuffer = await file.arrayBuffer();
+      const fileName = `${telegram_id}/${Date.now()}.jpg`;
+      
+      // Upload to storage
+      const { error: storageErr } = await supabase.storage.from("payments").upload(fileName, arrayBuffer, { 
+        contentType: "image/jpeg",
+        upsert: true
+      });
+      if (storageErr) throw storageErr;
+
+      // Get order data
+      const { data: order } = await supabase.from("orders").select("*").eq("id", orderId).single();
+      if (!order) throw new Error("Order not found");
+
+      // AI Verification
+      const aiResult = await verifyReceiptWithAI(arrayBuffer);
+      const isVerified = Math.abs(aiResult.amount - order.total) <= 500;
+
+      // Update order
+      await supabase.from("orders").update({
+        payment_screenshot: fileName,
+        ai_amount: aiResult.amount,
+        ai_verified: isVerified,
+        status: isVerified ? "confirmed" : "payment_uploaded"
+      }).eq("id", order.id);
+
+      // Notify User
+      if (telegram_id) {
+        try {
+          if (isVerified) {
+            await bot.api.sendMessage(telegram_id as string, `✅ To'lov tasdiqlandi! (${aiResult.amount}₩)\nBuyurtmangiz tayyorlanmoqda.`);
+          } else {
+            await bot.api.sendMessage(telegram_id as string, `⚠️ To'lov summasi mos kelmadi. Kutilgan: ${order.total}₩, Topilgan: ${aiResult.amount}₩. Admin tekshiradi.`);
+          }
+        } catch (err: any) {
+          console.error("[API /payment] Failed to notify user:", err.message);
+        }
+      }
+
+      // Notify Admin
+      try {
+        const { data: items } = await supabase.from("order_items").select("*").eq("order_id", orderId);
+        await notifyAdmin(order, items || []);
+      } catch (err: any) {
+        console.error("[API /payment] Admin notification failed:", err.message);
+      }
+
+      return new Response(JSON.stringify({ ok: true, verified: isVerified }), { headers });
     }
 
     return new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers });

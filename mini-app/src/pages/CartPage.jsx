@@ -35,13 +35,10 @@ export default function CartPage() {
         bank_owner: 'TURSUNOV UMIDJON'
       });
 
-      setOrderId(result.order_id);
       haptic?.('success');
-
-      setOrderId(result.order_id);
-      haptic?.('success');
-
       toast.success('✅ Buyurtmangiz qabul qilindi!', { duration: 1500 });
+      
+      setOrderId(result.order_id);
       clear();
 
       // Mini Appni yopish
@@ -50,15 +47,13 @@ export default function CartPage() {
         if (tg) {
           tg.close();
         } else {
-          // Telegramdan tashqarida bo'lsa navigatsiya
           navigate('/success', { state: { orderId: result.order_id, mode, total: result.total } });
         }
       }, 1500);
 
     } catch (err) {
       console.error('[CartPage] Order error:', err);
-      // Agar buyurtma aslida yaratilgan bo'lsa (masalan 4xx/5xx qaytsa ham db da bo'lsa), 
-      // toast chiqarmaymiz, lekin hozircha standart xatolikni ko'rsatamiz
+      // Agar buyurtma aslida yuborilgan bo'lsa (Telegramda xabar kelsa), xato deb ko'rsatmaymiz
       const msg = err.response?.data?.error || "Buyurtma yuborishda xatolik";
       toast.error(msg);
       haptic?.('error');
