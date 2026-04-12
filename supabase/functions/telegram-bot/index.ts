@@ -8,10 +8,40 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY") || "";
 const BANK_ACCOUNT = Deno.env.get("BANK_ACCOUNT") || "";
 const BANK_OWNER = Deno.env.get("BANK_OWNER") || "";
+const ADMIN_ID = Deno.env.get("ADMIN_ID") || "5525091743"; // Main admin Telegram ID
 
 // ── Initialize Bot & DB ────────────────────────────────────
 const bot = new Bot(BOT_TOKEN);
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+// ── Helpers ───────────────────────────────────────────────
+async function getShopStatus() {
+  const { data } = await supabase.from("settings").select("*").eq("id", 1).maybeSingle();
+  return data || { is_open: true, closed_message: "Uzr, bugun dam olish kunimiz." };
+}
+
+async function sendBroadcast(message: string) {
+  const { data: users } = await supabase.from("users").select("telegram_id");
+  if (!users) return { successCount: 0, failureCount: 0 };
+
+  let successCount = 0;
+  let failureCount = 0;
+
+  for (const user of users) {
+    try {
+      await bot.api.sendMessage(user.telegram_id, message);
+      successCount++;
+      // Simple rate limiting (20 messages per second to be safe)
+      await new Promise(r => setTimeout(r, 50));
+    } catch (err: any) {
+      // 403 Forbidden is usually when the user blocked the bot
+      console.warn(`[Broadcast] Failed for ${user.telegram_id}:`, err.message);
+      failureCount++;
+    }
+  }
+
+  return { successCount, failureCount };
+}
 
 // ── AI OCR Helper ──────────────────────────────────────────
 async function verifyReceiptWithAI(buffer: ArrayBuffer) {
@@ -41,9 +71,9 @@ async function verifyReceiptWithAI(buffer: ArrayBuffer) {
 
 // ── Notification Helpers ─────────────────────────────────────
 async function notifyAdmin(order: any, items: any[], photoId?: string) {
-  const adminId = Deno.env.get("ADMIN_CHAT_ID");
+  const adminChatId = Deno.env.get("ADMIN_CHAT_ID") || ADMIN_ID; // Use ADMIN_ID as fallback
   
-  if (!adminId || adminId === "0") {
+  if (!adminChatId || adminChatId === "0") {
     console.error("[NotifyAdmin] Admin Chat ID is missing or invalid");
     return;
   }
@@ -75,13 +105,13 @@ async function notifyAdmin(order: any, items: any[], photoId?: string) {
   
   try {
     if (photoId) {
-      await bot.api.sendPhoto(adminId, photoId, { 
+      await bot.api.sendPhoto(adminChatId, photoId, { 
         caption: text, 
         reply_markup: keyboard,
         parse_mode: "HTML" 
       });
     } else {
-      await bot.api.sendMessage(adminId, text, { 
+      await bot.api.sendMessage(adminChatId, text, { 
         reply_markup: keyboard,
         parse_mode: "HTML"
       });
@@ -93,7 +123,13 @@ async function notifyAdmin(order: any, items: any[], photoId?: string) {
 
 // ── Bot Handlers ───────────────────────────────────────────
 
-bot.command("start", (ctx) => {
+bot.command("start", async (ctx: any) => {
+  const settings = await getShopStatus();
+  
+  if (!settings.is_open && ctx.from?.id.toString() !== ADMIN_ID) {
+    return ctx.reply(`🔴 ${settings.closed_message}`);
+  }
+
   return ctx.reply(
     "🇺🇿 Tashkent Cafe botiga xush kelibsiz!\n\n" +
     "🍴 Taom buyurtma qilish uchun Mini App-ni oching.\n" +
@@ -107,7 +143,7 @@ bot.command("start", (ctx) => {
 });
 
 // Handle payment screenshots from Telegram
-bot.on("message:photo", async (ctx) => {
+bot.on("message:photo", async (ctx: any) => {
   const photo = ctx.message.photo.pop();
   if (!photo) return;
   const telegramId = ctx.from.id;
@@ -166,7 +202,7 @@ bot.on("message:photo", async (ctx) => {
 
 // ── Admin Action Handlers ────────────────────────────────────
 
-bot.callbackQuery(/approve_order_(\d+)/, async (ctx) => {
+bot.callbackQuery(/approve_order_(\d+)/, async (ctx: any) => {
   const orderId = ctx.match[1];
   try {
     const { data: order } = await supabase.from("orders").update({ status: "confirmed" }).eq("id", orderId).select("*, users(telegram_id)").single();
@@ -198,7 +234,7 @@ bot.callbackQuery(/approve_order_(\d+)/, async (ctx) => {
   }
 });
 
-bot.callbackQuery(/reject_order_(\d+)/, async (ctx) => {
+bot.callbackQuery(/reject_order_(\d+)/, async (ctx: any) => {
   const orderId = ctx.match[1];
   try {
     const { data: order } = await supabase.from("orders").update({ status: "cancelled" }).eq("id", orderId).select("*, users(telegram_id)").single();
@@ -243,7 +279,7 @@ async function handleApi(req: Request): Promise<Response> {
   // CORS Headers
   const headers = new Headers({
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS, PATCH",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Content-Type": "application/json"
   });
@@ -251,16 +287,25 @@ async function handleApi(req: Request): Promise<Response> {
   if (req.method === "OPTIONS") return new Response(null, { headers });
 
   try {
+    // ── Public Endpoints ────────────────────────────────────
+    
     // 1. GET /menu
     if (path === "/menu" && req.method === "GET") {
       const { data } = await supabase.from("menu").select("*").order("category");
-      return new Response(JSON.stringify({ ok: true, items: data }), { headers });
+      const settings = await getShopStatus();
+      return new Response(JSON.stringify({ ok: true, items: data, settings }), { headers });
     }
 
     // 2. POST /orders
     if (path === "/orders" && req.method === "POST") {
       const body = await req.json();
       const { telegram_id, name, username, mode, items } = body;
+
+      // Shop Status Guard
+      const settings = await getShopStatus();
+      if (!settings.is_open && telegram_id?.toString() !== ADMIN_ID) {
+        return new Response(JSON.stringify({ error: settings.closed_message }), { status: 403, headers });
+      }
 
       // Upsert user
       const { data: user, error: userErr } = await supabase.from("users").upsert(
@@ -410,6 +455,129 @@ async function handleApi(req: Request): Promise<Response> {
       }
 
       return new Response(JSON.stringify({ ok: true, verified: isVerified }), { headers });
+    }
+
+    // ── Admin Management Endpoints ──────────────────────────
+
+    // Authorization: Verify user_id matches ADMIN_ID
+    const authUserId = req.headers.get("X-User-Id") || url.searchParams.get("admin_id");
+    
+    // Check if it's a management endpoint
+    const managementPaths = ["/settings/toggle", "/menu/availability", "/broadcast"];
+    const isManagement = managementPaths.some(p => path.startsWith(p));
+
+    if (isManagement) {
+      if (authUserId?.toString() !== ADMIN_ID) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers });
+      }
+
+      // 5. POST /settings/toggle
+      if (path === "/settings/toggle" && req.method === "POST") {
+        const { is_open } = await req.json();
+        await supabase.from("settings").update({ is_open }).eq("id", 1);
+        return new Response(JSON.stringify({ ok: true, is_open }), { headers });
+      }
+
+      // 6. POST /menu/availability
+      if (path === "/menu/availability" && req.method === "POST") {
+        const { id, is_sold_out } = await req.json();
+        await supabase.from("menu").update({ is_sold_out }).eq("id", id);
+        return new Response(JSON.stringify({ ok: true }), { headers });
+      }
+
+      // 7. POST /broadcast
+      if (path === "/broadcast" && req.method === "POST") {
+        const { message } = await req.json();
+        const result = await sendBroadcast(message);
+        return new Response(JSON.stringify({ ok: true, ...result }), { headers });
+      }
+
+      // 8. GET /admin/orders
+      if (path === "/admin/orders" && req.method === "GET") {
+        const { data: orders } = await supabase.from("orders")
+          .select("*, users(*), order_items(*)")
+          .order("created_at", { ascending: false })
+          .limit(100);
+        
+        const formattedOrders = (orders || []).map((o: any) => ({
+          ...o,
+          user_name: o.users?.name,
+          username: o.users?.username,
+          items: o.order_items
+        }));
+        
+        return new Response(JSON.stringify({ ok: true, orders: formattedOrders }), { headers });
+      }
+
+      // 9. POST /admin/orders/:id/status
+      const statusMatch = path.match(/\/admin\/orders\/(\d+)\/status/);
+      if (statusMatch && req.method === "POST") {
+        const orderId = statusMatch[1];
+        const { status } = await req.json();
+        const { data: order } = await supabase.from("orders")
+          .update({ status })
+          .eq("id", orderId)
+          .select("*, users(telegram_id)")
+          .single();
+        
+        if (order) {
+          try {
+            const statusMap: Record<string, string> = {
+              confirmed: "tasdiqlandi va tayyorlanmoqda",
+              rejected: "rad etildi",
+              delivered: "yetkazib berildi",
+              pending: "kutish rejimiga o'tkazildi"
+            };
+            const statusText = statusMap[status] || status;
+            await bot.api.sendMessage(order.users.telegram_id, `🔔 Buyurtmangiz (#${orderId}) statusi o'zgardi: ${statusText}!`);
+          } catch (err) { console.error("User notify failed:", err); }
+        }
+        
+        return new Response(JSON.stringify({ ok: true, order }), { headers });
+      }
+
+      // 10. GET /admin/analytics
+      if (path === "/admin/analytics" && req.method === "GET") {
+        const sevenDaysAgo = new Date(Date.now() - 7*24*60*60*1000).toISOString();
+        
+        // Weekly Data
+        const { data: weeklyOrders } = await supabase.from("orders")
+          .select("created_at, mode, total, status")
+          .gte("created_at", sevenDaysAgo);
+        
+        const weeklyMap: Record<string, any> = {};
+        (weeklyOrders || []).forEach((o: any) => {
+          const d = o.created_at.split('T')[0];
+          const key = d + '_' + o.mode;
+          if (!weeklyMap[key]) {
+            weeklyMap[key] = { date: d, mode: o.mode, order_count: 0, revenue: 0 };
+          }
+          weeklyMap[key].order_count++;
+          if (['confirmed','delivered','ai_verified'].includes(o.status)) {
+             weeklyMap[key].revenue += o.total;
+          }
+        });
+
+        // Top Items
+        const { data: topItemsRaw } = await supabase.from("order_items")
+          .select("*, orders!inner(status, created_at)")
+          .gte("orders.created_at", sevenDaysAgo)
+          .in("orders.status", ["confirmed", "delivered", "ai_verified"]);
+        
+        const itemsMap: Record<string, any> = {};
+        (topItemsRaw || []).forEach((oi: any) => {
+          if(!itemsMap[oi.menu_item_id]) {
+            itemsMap[oi.menu_item_id] = { name_uz: oi.name_uz, total_qty: 0, revenue: 0 };
+          }
+          itemsMap[oi.menu_item_id].total_qty += oi.quantity;
+          itemsMap[oi.menu_item_id].revenue += (oi.quantity * oi.price);
+        });
+
+        const topItems = Object.values(itemsMap).sort((a,b) => b.total_qty - a.total_qty).slice(0, 10);
+        const weekly = Object.values(weeklyMap).sort((a,b) => b.date.localeCompare(a.date));
+
+        return new Response(JSON.stringify({ ok: true, weekly, topItems }), { headers });
+      }
     }
 
     return new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers });

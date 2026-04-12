@@ -39,16 +39,23 @@ export default function MenuPage() {
   const total = cartItems.reduce((sum, i) => sum + i.price * i.quantity, 0);
 
   const [menu, setMenu] = useState([]);
+  const [settings, setSettings] = useState({ is_open: true, closed_message: "" });
   const [loading, setLoading] = useState(true);
   const [category, setCategory] = useState('Hammasi');
   const [lastOrder, setLastOrder] = useState(null);
   const [showRepeatBanner, setShowRepeatBanner] = useState(false);
 
-  // ── Fetch menu ─────────────────────────────────────────
+  const ADMIN_ID = import.meta.env.VITE_ADMIN_ID || "999999999";
+  const isAdmin = user?.id?.toString() === ADMIN_ID;
+
+  // ── Fetch menu & settings ──────────────────────────────
   useEffect(() => {
     getMenu()
-      .then(data => setMenu(data.items || []))
-      .catch(() => toast.error("Menyu yuklashda xatolik"))
+      .then(data => {
+        setMenu(data.items || []);
+        if (data.settings) setSettings(data.settings);
+      })
+      .catch(() => toast.error("Ma'lumot yuklashda xatolik"))
       .finally(() => setLoading(false));
   }, []);
 
@@ -105,6 +112,22 @@ export default function MenuPage() {
                 👋 {user.name?.split(' ')[0]}
               </div>
             )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {isAdmin && (
+              <button 
+                onClick={() => navigate('/admin')}
+                style={{
+                  background: 'rgba(255,216,64,0.15)',
+                  border: '1px solid var(--accent-gold)',
+                  borderRadius: '50%',
+                  width: '38px', height: '38px',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  cursor: 'pointer', fontSize: '18px'
+                }}
+              >
+                ⚙️
+              </button>
+            )}
             <button 
               onClick={() => navigate('/cart')}
               style={{
@@ -131,6 +154,7 @@ export default function MenuPage() {
                 </div>
               )}
             </button>
+          </div>
           </div>
         </div>
 
@@ -338,6 +362,34 @@ export default function MenuPage() {
           <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-muted)' }}>
             <div style={{ fontSize: '48px', marginBottom: '12px' }}>🍽️</div>
             <div>Bu kategoriyada taom yo'q</div>
+          </div>
+        )}
+
+        {/* ── Shop Closed Overlay ────────────────────────── */}
+        {!settings.is_open && !isAdmin && (
+          <div style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 1000,
+            background: 'rgba(10,15,30,0.9)',
+            backdropFilter: 'blur(8px)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            textAlign: 'center',
+            padding: '30px'
+          }}>
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+            >
+              <div style={{ fontSize: '80px', marginBottom: '20px' }}>😴</div>
+              <h2 style={{ fontSize: '24px', fontWeight: 800, marginBottom: '12px' }}>Hozir yopiqmiz</h2>
+              <p style={{ color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                {settings.closed_message || "Uzr, hozirda buyurtma qabul qila olmaymiz. Birozdan so'ng xabar oling."}
+              </p>
+            </motion.div>
           </div>
         )}
       </div>

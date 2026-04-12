@@ -2,8 +2,17 @@ import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import toast from 'react-hot-toast';
-import { getAdminOrders, updateOrderStatus, toggleSoldOut, getAnalytics, getMenu } from '../api';
+import { 
+  getAdminOrders, 
+  updateOrderStatus, 
+  toggleSoldOut, 
+  getAnalytics, 
+  getMenu,
+  toggleShopStatus,
+  triggerBroadcast
+} from '../api';
 import { useSSE } from '../hooks/useSSE';
+import { useTelegramWebApp } from '../hooks/useTelegramWebApp';
 
 const won = (n) => `${Number(n).toLocaleString('ko-KR')}₩`;
 
@@ -16,80 +25,46 @@ const STATUS_CONFIG = {
   delivered:         { label: 'Yetkazildi',     color: '#8B5CF6', emoji: '🎉' },
 };
 
-// ── Admin password guard ──────────────────────────────────────
-const ADMIN_PIN = '1234'; // Change in production!
-
-function PinGate({ onSuccess }) {
-  const [pin, setPin] = useState('');
-  const check = () => {
-    if (pin === ADMIN_PIN) onSuccess();
-    else { setPin(''); toast.error('Noto\'g\'ri PIN'); }
-  };
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100dvh', padding: '24px', gap: '20px' }}>
-      <div style={{ fontSize: '52px' }}>🔐</div>
-      <h2>Admin Panel</h2>
-      <input
-        type="password"
-        className="input"
-        placeholder="PIN kod kiriting"
-        value={pin}
-        onChange={e => setPin(e.target.value)}
-        onKeyDown={e => e.key === 'Enter' && check()}
-        style={{ maxWidth: '280px', textAlign: 'center', fontSize: '20px', letterSpacing: '0.3em' }}
-        autoFocus
-      />
-      <button className="btn btn-primary" onClick={check} style={{ maxWidth: '280px', width: '100%' }}>
-        Kirish
-      </button>
-    </div>
-  );
-}
-
 export default function AdminPage() {
-  const [authed, setAuthed] = useState(false);
-  const [tab, setTab] = useState('orders'); // 'orders' | 'menu' | 'analytics'
+  const { user, tg } = useTelegramWebApp();
+  const ADMIN_ID = import.meta.env.VITE_ADMIN_ID || "999999999";
+  
+  const [tab, setTab] = useState('orders'); // 'orders' | 'menu' | 'analytics' | 'settings'
   const [orders, setOrders] = useState([]);
   const [menuItems, setMenuItems] = useState([]);
   const [analytics, setAnalytics] = useState(null);
+  const [settings, setSettings] = useState({ is_open: true, closed_message: "" });
   const [loading, setLoading] = useState(true);
+  const [broadcastMessage, setBroadcastMessage] = useState("");
+  const [broadcasting, setBroadcasting] = useState(false);
+
+  const isActuallyAdmin = user?.id?.toString() === ADMIN_ID;
 
   // ── Load data ─────────────────────────────────────────────
-  const loadOrders = useCallback(() => {
-    getAdminOrders().then(d => setOrders(d.orders || [])).catch(() => {});
-  }, []);
-
-  const loadMenu = useCallback(() => {
-    getMenu().then(d => setMenuItems(d.items || [])).catch(() => {});
-  }, []);
-
-  const loadAnalytics = useCallback(() => {
-    getAnalytics().then(d => setAnalytics(d)).catch(() => {});
+  const loadInitialData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [ordersRes, menuRes, analyticsRes] = await Promise.all([
+        getAdminOrders(),
+        getMenu(),
+        getAnalytics(),
+      ]);
+      setOrders(ordersRes.orders || []);
+      setMenuItems(menuRes.items || []);
+      setSettings(menuRes.settings || { is_open: true, closed_message: "" });
+      setAnalytics(analyticsRes);
+    } catch (err) {
+      toast.error("Ma'lumot yuklashda xatolik");
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
-    if (!authed) return;
-    setLoading(true);
-    Promise.all([
-      getAdminOrders().then(d => setOrders(d.orders || [])),
-      getMenu().then(d => setMenuItems(d.items || [])),
-      getAnalytics().then(d => setAnalytics(d)),
-    ]).finally(() => setLoading(false));
-  }, [authed]);
-
-  // ── SSE real-time updates ─────────────────────────────────
-  useSSE('/api/admin/stream', {
-    new_order: (data) => {
-      setOrders(prev => [{ ...data.order, items: data.items }, ...prev]);
-      toast('🔔 Yangi buyurtma!', { icon: '🍽️', duration: 4000 });
-    },
-    order_updated: (data) => {
-      setOrders(prev => prev.map(o => o.id === data.order?.id ? { ...o, ...data.order } : o));
-    },
-    menu_updated: (data) => {
-      setMenuItems(prev => prev.map(i => i.id === data.item?.id ? data.item : i));
-    },
-  }, authed);
+    if (isActuallyAdmin) {
+      loadInitialData();
+    }
+  }, [isActuallyAdmin, loadInitialData]);
 
   // ── Actions ───────────────────────────────────────────────
   const handleStatus = async (orderId, status) => {
@@ -102,13 +77,51 @@ export default function AdminPage() {
 
   const handleSoldOut = async (id, current) => {
     try {
-      const result = await toggleSoldOut(id, !current);
-      setMenuItems(prev => prev.map(i => i.id === id ? result.item : i));
-      toast.success(result.item.is_sold_out ? '🚫 Sold Out' : '✅ Mavjud');
+      await toggleSoldOut(id, !current);
+      setMenuItems(prev => prev.map(i => i.id === id ? { ...i, is_sold_out: !current } : i));
+      toast.success(!current ? '🚫 Sold Out' : '✅ Mavjud');
     } catch { toast.error('Xatolik'); }
   };
 
-  if (!authed) return <PinGate onSuccess={() => setAuthed(true)} />;
+  const handleToggleShop = async () => {
+    const newState = !settings.is_open;
+    try {
+      await toggleShopStatus(newState);
+      setSettings(prev => ({ ...prev, is_open: newState }));
+      tg?.showAlert(newState ? "✅ Oshxona ochildi!" : "🔴 Oshxona yopildi!");
+    } catch { toast.error('Xatolik yuz berdi'); }
+  };
+
+  const handleBroadcast = async () => {
+    if (!broadcastMessage.trim()) return toast.error("Xabar matnini kiriting");
+    
+    tg?.showConfirm("Barcha foydalanuvchilarga xabar yuborilsinmi?", async (yes) => {
+      if (!yes) return;
+      
+      setBroadcasting(true);
+      try {
+        const res = await triggerBroadcast(broadcastMessage);
+        tg?.showAlert(`📢 Xabar yuborildi!\n\nMuvaffaqiyatli: ${res.successCount}\nXatolik: ${res.failureCount}`);
+        setBroadcastMessage("");
+      } catch {
+        toast.error("Xabar yuborishda xatolik");
+      } finally {
+        setBroadcasting(false);
+      }
+    });
+  };
+
+  if (!isActuallyAdmin) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100dvh', padding: '24px' }}>
+        <div style={{ fontSize: '52px' }}>🚫</div>
+        <h2>Siz admin emassiz</h2>
+        <button className="btn btn-primary" onClick={() => window.location.href = '/'}>
+          Bosh sahifaga qaytish
+        </button>
+      </div>
+    );
+  }
 
   // ── Analytics chart data ──────────────────────────────────
   const chartData = analytics?.weekly?.reduce((acc, row) => {
@@ -130,11 +143,12 @@ export default function AdminPage() {
           <span className="badge badge-success" style={{ animation: 'pulse-glow 2s infinite' }}>● LIVE</span>
         </div>
         {/* Tab navigation */}
-        <div style={{ display: 'flex', gap: '8px' }}>
+        <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', scrollbarWidth: 'none' }}>
           {[
             { id: 'orders', label: '📋 Buyurtmalar', count: orders.filter(o => !['confirmed','rejected','delivered'].includes(o.status)).length },
             { id: 'menu', label: '🍽 Menyu' },
             { id: 'analytics', label: '📈 Analitika' },
+            { id: 'settings', label: '⚙️ Sozlamalar' },
           ].map(t => (
             <button
               key={t.id}
@@ -151,6 +165,7 @@ export default function AdminPage() {
                 display: 'flex',
                 alignItems: 'center',
                 gap: '6px',
+                whiteSpace: 'nowrap'
               }}
             >
               {t.label}
@@ -166,8 +181,8 @@ export default function AdminPage() {
 
       <div style={{ padding: '16px' }}>
 
-        {/* ── ORDERS TAB ── */}
         <AnimatePresence mode="wait">
+          {/* ── ORDERS TAB ── */}
           {tab === 'orders' && (
             <motion.div key="orders" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
               {loading && <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Yuklanmoqda...</div>}
@@ -189,7 +204,6 @@ export default function AdminPage() {
                       transition={{ delay: idx * 0.04 }}
                       style={{ padding: '16px', overflow: 'hidden' }}
                     >
-                      {/* Top row */}
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
                         <div>
                           <span style={{ fontWeight: 800, fontSize: '15px' }}>#{order.id}</span>
@@ -210,7 +224,6 @@ export default function AdminPage() {
                         </span>
                       </div>
 
-                      {/* User & items */}
                       <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
                         👤 {order.user_name || 'Noma\'lum'}
                         {order.username ? ` (@${order.username})` : ''}
@@ -229,7 +242,6 @@ export default function AdminPage() {
                         </span>
                       </div>
 
-                      {/* AI badge */}
                       {order.payment_screenshot && (
                         <div style={{ marginBottom: '10px' }}>
                           <span className={`badge ${order.ai_verified ? 'badge-success' : 'badge-sky'}`} style={{ fontSize: '11px' }}>
@@ -239,7 +251,6 @@ export default function AdminPage() {
                         </div>
                       )}
 
-                      {/* Action buttons */}
                       {!['confirmed','rejected','delivered'].includes(order.status) && (
                         <div style={{ display: 'flex', gap: '8px' }}>
                           <button
@@ -256,16 +267,16 @@ export default function AdminPage() {
                           >
                             ❌ Rad etish
                           </button>
-                          {order.status === 'confirmed' && (
-                            <button
-                              className="btn btn-secondary"
-                              style={{ flex: 1, padding: '10px', fontSize: '13px' }}
-                              onClick={() => handleStatus(order.id, 'delivered')}
-                            >
-                              🎉 Yetkazildi
-                            </button>
-                          )}
                         </div>
+                      )}
+                      {order.status === 'confirmed' && (
+                        <button
+                          className="btn btn-secondary"
+                          style={{ width: '100%', padding: '10px', fontSize: '13px' }}
+                          onClick={() => handleStatus(order.id, 'delivered')}
+                        >
+                          🎉 Yetkazildi
+                        </button>
                       )}
                     </motion.div>
                   );
@@ -282,9 +293,9 @@ export default function AdminPage() {
                   <div
                     key={item.id}
                     className="glass-card-sm"
-                    style={{ padding: '12px 14px', display: 'flex', alignItems: 'center', gap: '12px' }}
+                    style={{ padding: '12px 14px', display: 'flex', alignItems: 'center', gap: '12px', opacity: item.is_sold_out ? 0.6 : 1 }}
                   >
-                    <span style={{ fontSize: '24px', flexShrink: 0 }}>{item.emoji}</span>
+                    <span style={{ fontSize: '24px', flexShrink: 0 }}>{item.emoji || '🍽️'}</span>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: '14px', fontWeight: 600 }}>{item.name_uz}</div>
                       <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{item.category}</div>
@@ -298,15 +309,15 @@ export default function AdminPage() {
                         padding: '6px 12px',
                         borderRadius: '8px',
                         border: 'none',
-                        background: item.is_sold_out ? 'rgba(16,185,129,0.2)' : 'rgba(244,63,94,0.2)',
-                        color: item.is_sold_out ? 'var(--accent-emerald)' : 'var(--accent-rose)',
+                        background: !item.is_sold_out ? 'rgba(16,185,129,0.2)' : 'rgba(244,63,94,0.2)',
+                        color: !item.is_sold_out ? 'var(--accent-emerald)' : 'var(--accent-rose)',
                         fontSize: '12px',
                         fontWeight: 700,
                         cursor: 'pointer',
                         flexShrink: 0,
                       }}
                     >
-                      {item.is_sold_out ? '✅ Bor' : '🚫 Tugadi'}
+                      {item.is_sold_out ? '🚫 Tugadi' : '✅ Bor'}
                     </button>
                   </div>
                 ))}
@@ -317,11 +328,9 @@ export default function AdminPage() {
           {/* ── ANALYTICS TAB ── */}
           {tab === 'analytics' && (
             <motion.div key="analytics" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-              {/* Summary cards */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px' }}>
                 {[
-                  { label: 'Jami buyurtmalar', value: orders.length, emoji: '📦' },
-                  { label: 'Tasdiqlangan', value: orders.filter(o => ['confirmed','delivered'].includes(o.status)).length, emoji: '✅' },
+                  { label: 'Tasdiqlanganlar', value: orders.filter(o => ['confirmed','delivered'].includes(o.status)).length, emoji: '✅' },
                   { label: 'To Go', value: orders.filter(o => o.mode === 'togo').length, emoji: '🛍' },
                   { label: 'Bozor', value: orders.filter(o => o.mode === 'bozor').length, emoji: '🌅' },
                 ].map(card => (
@@ -333,7 +342,6 @@ export default function AdminPage() {
                 ))}
               </div>
 
-              {/* Weekly revenue chart */}
               {chartData.length > 0 && (
                 <div className="glass-card" style={{ padding: '20px 12px' }}>
                   <h3 style={{ marginBottom: '16px', fontSize: '14px', paddingLeft: '8px' }}>📈 Haftalik daromad (₩)</h3>
@@ -351,20 +359,9 @@ export default function AdminPage() {
                       <Bar dataKey="bozor" fill="#10B981" radius={[4,4,0,0]} name="Bozor" />
                     </BarChart>
                   </ResponsiveContainer>
-                  <div style={{ display: 'flex', gap: '16px', justifyContent: 'center', marginTop: '12px', fontSize: '12px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-muted)' }}>
-                      <div style={{ width: '10px', height: '10px', borderRadius: '2px', background: '#38BDF8' }} />
-                      To Go
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-muted)' }}>
-                      <div style={{ width: '10px', height: '10px', borderRadius: '2px', background: '#10B981' }} />
-                      Bozor
-                    </div>
-                  </div>
                 </div>
               )}
 
-              {/* Top items */}
               {analytics?.topItems?.length > 0 && (
                 <div className="glass-card" style={{ padding: '16px', marginTop: '12px' }}>
                   <h3 style={{ marginBottom: '14px', fontSize: '14px' }}>🏆 Eng ko'p buyurtmalar (7 kun)</h3>
@@ -373,13 +370,69 @@ export default function AdminPage() {
                       <span style={{ fontSize: '12px', color: 'var(--text-muted)', width: '20px', fontWeight: 700 }}>#{idx + 1}</span>
                       <div style={{ flex: 1, fontSize: '13px' }}>{item.name_uz}</div>
                       <span className="badge badge-gold">{item.total_qty} ta</span>
-                      <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--accent-gold)', minWidth: '70px', textAlign: 'right' }}>
-                        {won(item.revenue)}
-                      </span>
                     </div>
                   ))}
                 </div>
               )}
+            </motion.div>
+          )}
+
+          {/* ── SETTINGS TAB ── */}
+          {tab === 'settings' && (
+            <motion.div key="settings" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                {/* Shop Control */}
+                <div className="glass-card" style={{ padding: '20px' }}>
+                  <h3 style={{ fontSize: '16px', marginBottom: '16px' }}>🏬 Oshxona holati</h3>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div>
+                      <div style={{ fontSize: '14px', fontWeight: 700, color: settings.is_open ? 'var(--accent-emerald)' : 'var(--accent-rose)' }}>
+                        Hozir: {settings.is_open ? "OCHIQ" : "YOPIQ"}
+                      </div>
+                      <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                        Mijozlar buyurtma berish imkoniyati
+                      </div>
+                    </div>
+                    <button 
+                      onClick={handleToggleShop}
+                      className={settings.is_open ? "btn btn-danger" : "btn btn-success"}
+                      style={{ padding: '10px 20px', fontSize: '13px' }}
+                    >
+                      {settings.is_open ? "Yopish 🔴" : "Ochish ✅"}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Broadcast Tool */}
+                <div className="glass-card" style={{ padding: '20px' }}>
+                  <h3 style={{ fontSize: '16px', marginBottom: '12px' }}>📢 Xabar yuborish</h3>
+                  <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+                    Barcha foydalanuvchilarga ommaviy xabar yuborish.
+                  </p>
+                  <textarea 
+                    className="input"
+                    rows="4"
+                    placeholder="Xabar matni..."
+                    value={broadcastMessage}
+                    onChange={e => setBroadcastMessage(e.target.value)}
+                    style={{ marginBottom: '16px', fontSize: '14px', resize: 'none' }}
+                  />
+                  <button 
+                    className="btn btn-primary btn-full"
+                    onClick={handleBroadcast}
+                    disabled={broadcasting || !broadcastMessage.trim()}
+                    style={{ background: 'var(--accent-sky)' }}
+                  >
+                    {broadcasting ? "Yuborilmoqda..." : "Barchaga yuborish 🚀"}
+                  </button>
+                </div>
+                
+                <div style={{ textAlign: 'center', marginTop: '20px' }}>
+                   <button className="btn btn-secondary" onClick={() => window.location.href = '/'}>
+                      Tizimdan chiqish
+                   </button>
+                </div>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
