@@ -40,21 +40,27 @@ export default function PaymentPage() {
       await uploadPayment(orderId, file, user.id);
       setUploaded(true);
       haptic?.('success');
-      toast.success('✅ Skrinshot yuborildi! Admin tasdiqlashini kuting.', { duration: 2000 });
-      clear();
-
-      // Mini Appni yopish
-      setTimeout(() => {
-        const tg = window.Telegram?.WebApp;
-        if (tg) {
+      
+      const tg = window.Telegram?.WebApp;
+      if (tg) {
+        tg.showAlert('✅ Skrinshot yuborildi! Admin tasdiqlashini kuting.', () => {
+          clear();
           tg.close();
-        } else {
-          navigate('/');
-        }
-      }, 2000);
+        });
+      } else {
+        toast.success('✅ Skrinshot yuborildi!');
+        clear();
+        setTimeout(() => navigate('/'), 2000);
+      }
 
     } catch (err) {
-      toast.error("Yuklashda xatolik. Qayta urinib ko'ring.");
+      const msg = "Yuklashda xatolik yuz berdi. Iltimos qaytadan urinib ko'ring.";
+      const tg = window.Telegram?.WebApp;
+      if (tg) {
+        tg.showAlert(msg);
+      } else {
+        toast.error(msg);
+      }
       haptic?.('error');
     } finally {
       setUploading(false);

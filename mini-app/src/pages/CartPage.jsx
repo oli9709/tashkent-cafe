@@ -36,26 +36,31 @@ export default function CartPage() {
       });
 
       haptic?.('success');
-      toast.success('✅ Buyurtmangiz qabul qilindi!', { duration: 1500 });
       
-      setOrderId(result.order_id);
-      clear();
-
-      // Mini Appni yopish
-      setTimeout(() => {
-        const tg = window.Telegram?.WebApp;
-        if (tg) {
+      const tg = window.Telegram?.WebApp;
+      if (tg) {
+        tg.showAlert('✅ Buyurtmangiz qabul qilindi! Admin tez orada siz bilan bog\'lanadi.', () => {
+          setOrderId(result.order_id);
+          clear();
           tg.close();
-        } else {
-          navigate('/success', { state: { orderId: result.order_id, mode, total: result.total } });
-        }
-      }, 1500);
+        });
+      } else {
+        toast.success('✅ Buyurtmangiz qabul qilindi!');
+        setOrderId(result.order_id);
+        clear();
+        setTimeout(() => navigate('/success', { state: { orderId: result.order_id, mode, total: result.total } }), 1500);
+      }
 
     } catch (err) {
       console.error('[CartPage] Order error:', err);
-      // Agar buyurtma aslida yuborilgan bo'lsa (Telegramda xabar kelsa), xato deb ko'rsatmaymiz
-      const msg = err.response?.data?.error || "Buyurtma yuborishda xatolik";
-      toast.error(msg);
+      const msg = err.response?.data?.error || "Buyurtma yuborishda xatolik yuz berdi. Iltimos qaytadan urinib ko'ring.";
+      
+      const tg = window.Telegram?.WebApp;
+      if (tg) {
+        tg.showAlert(msg);
+      } else {
+        toast.error(msg);
+      }
       haptic?.('error');
     } finally {
       setLoading(false);
